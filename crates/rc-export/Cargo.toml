@@ -1,0 +1,21 @@
+[package]
+name = "rc-export"
+description = "PDF export of the chromatogram (SVG rendered to PDF)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rc-core.workspace = true
+rc-plotdata.workspace = true
+# usvg comes re-exported from svg2pdf (svg2pdf 0.13 is built on usvg 0.45 and
+# takes only its own Tree type), so it is not a direct dependency.
+svg2pdf.workspace = true
+# glyph advances of the embedded fonts, to measure text for the layout
+ttf-parser = "0.25"
+chrono.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

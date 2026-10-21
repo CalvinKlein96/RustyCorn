@@ -1,0 +1,19 @@
+[package]
+name = "rc-core"
+description = "Shared data model, CSV log, settings, run info and demo source"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+parking_lot.workspace = true
+chrono.workspace = true
+regex.workspace = true
+serde.workspace = true
+toml.workspace = true
+dirs.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

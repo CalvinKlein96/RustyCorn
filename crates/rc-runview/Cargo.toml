@@ -1,0 +1,22 @@
+[package]
+name = "rc-runview"
+description = "The run page: stacked/overlay chromatogram plots, toolbar, time slider, inspector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rc-core.workspace = true
+rc-plotdata.workspace = true
+rc-theme.workspace = true
+rc-panels.workspace = true
+rc-export.workspace = true
+egui.workspace = true
+egui_plot.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+eframe.workspace = true
+env_logger.workspace = true

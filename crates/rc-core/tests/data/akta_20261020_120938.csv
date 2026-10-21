@@ -1,0 +1,17 @@
+# Akta PRIME data log started 2026-10-20T12:09:38.727
+wall_time,cum_time_ms,cum_vol_mL,type,uv_AU,cond_mScm,ph,pctb_pct,pres_MPa,temp_degC,message
+2026-10-20T12:09:40.342,0.0,0.000000,EVT_INFO,,,,,,,"Sample: Water"
+2026-10-20T12:09:40.432,0.0,0.000000,EVT_INFO,,,,,,,"User: Alex"
+2026-10-20T12:09:40.432,0.0,0.000000,EVT_INFO,,,,,,,"Column: 5 ml HisTag"
+2026-10-20T12:09:40.432,0.0,0.000000,EVT_INFO,,,,,,,"Column volume (mL): 5.0"
+2026-10-20T12:09:40.433,0.0,0.000000,EVT_INFO,,,,,,,"Buffer B: Water"
+2026-10-20T12:09:40.433,0.0,0.000000,EVT_INFO,,,,,,,"Port 1: Water"
+2026-10-20T12:09:40.433,0.0,0.000000,EVT_INFO,,,,,,,"Port 8: Water"
+2026-10-20T12:09:50.585,0.0,0.000000,EVT_CONNECT,,,,,,,"Akta connected"
+2026-10-20T12:11:37.804,0.0,0.000000,EVT_LOG,,,,,,,"Method 2 saved by the Akta to /data/akta/methods/PrimeMeth_002.txt"
+2026-10-20T12:13:41.873,0.0,0.000000,EVT_LOG,,,,,,,"Method 2 sent to the Akta (24 lines)"
+2026-10-20T12:13:49.042,0.0,0.000000,EVT_LOG,,,,,,,"Method 1 sent to the Akta (25 lines)"
+2026-10-20T12:14:52.818,0.0,0.000000,EVT_LOG,,,,,,,"Method 2 sent to the Akta (24 lines)"
+2026-10-20T13:02:54.510,0.0,0.000000,EVT_LOG,,,,,,,"Method 3 sent to the Akta (25 lines)"
+2026-10-20T13:03:02.670,0.0,0.000000,EVT_LOG,,,,,,,"Method 4 sent to the Akta (24 lines)"
+2026-10-20T13:03:09.426,0.0,0.000000,EVT_LOG,,,,,,,"Method 5 sent to the Akta (25 lines)"

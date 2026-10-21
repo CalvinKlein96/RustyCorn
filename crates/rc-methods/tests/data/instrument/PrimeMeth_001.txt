@@ -1,0 +1,34 @@
+*****************************************************************
+** Method Dump
+**
+** AKTAprime   Ver  , V2.01               
+**
+** Dump Format Ver  , V1.00               
+**
+*****************************************************************
+
+
+******************
+** Method Settings
+******************
+Method Type        ,-
+Method             ,-
+Method base        ,ml
+Frac base          ,ml
+Max pressure (kPa) ,500
+Alarm (min/ml)     ,0.0
+
+*********************
+** Method Breakpoints
+*********************
+                     
+Brkp Volume   Conc Flow  Frac   Buff Inj    Peak   Autozero Eventmark
+                                          (mAu/min)
+
+,1   ,0.0     ,0   ,1.0  ,0.0   ,1   ,Load  ,0     ,Y       ,N
+,2   ,10.0    ,0   ,1.0  ,0.0   ,8   ,Load  ,0     ,N       ,N
+,3   ,29.9    ,0   ,1.0  ,0.0   ,8   ,Load  ,0     ,N       ,N
+,4   ,30.0    ,10  ,1.0  ,0.0   ,1   ,Load  ,0     ,N       ,N
+,5   ,40.0    ,10  ,1.0  ,1.0   ,1   ,Load  ,0     ,N       ,N
+,6   ,45.0    ,100 ,1.0  ,1.0   ,1   ,Load  ,0     ,N       ,N
+,7   ,50.0    ,100 ,1.0  ,0.0   ,1   ,Load  ,0     ,N       ,N

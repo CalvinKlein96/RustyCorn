@@ -1,0 +1,56 @@
+[package]
+name = "rustycorn"
+description = "RustyCorn — logging and visualisation for the ÄKTAprime / ÄKTAprime plus chromatography systems"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["chromatography", "akta", "laboratory", "serial", "egui"]
+categories = ["science", "visualization"]
+publish = false
+
+[[bin]]
+name = "rustycorn"
+path = "src/main.rs"
+
+[dependencies]
+rc-core.workspace = true
+rc-methods.workspace = true
+rc-protocol.workspace = true
+rc-plotdata.workspace = true
+rc-export.workspace = true
+rc-theme.workspace = true
+rc-panels.workspace = true
+rc-runview.workspace = true
+rc-methodeditor.workspace = true
+eframe.workspace = true
+egui.workspace = true
+rfd.workspace = true
+parking_lot.workspace = true
+log.workspace = true
+env_logger.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+# Ctrl-C in the terminal (and SIGTERM) closes the window normally, so the acquisition is
+# stopped (empty logs discarded) and the output report printed.
+ctrlc = { version = "3.4", features = ["termination"] }
+
+# Listing serial ports for the Settings page. On Linux the ports are read from
+# sysfs instead: serialport's udev enumeration opens every serial8250 port to
+# test it, and no port may be opened just to list it.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+serialport.workspace = true
+
+# Keeping a double-clicked console window open after a fatal error (crash.rs).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+
+[build-dependencies]
+winresource = "0.1"
+
+[dev-dependencies]
+tempfile.workspace = true

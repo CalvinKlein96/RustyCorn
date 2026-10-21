@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=RustyCorn
+GenericName=Chromatography logger
+Comment=Record and view ÄKTAprime runs
+Exec=rustycorn
+Icon=rustycorn
+Terminal=false
+StartupNotify=true
+StartupWMClass=rustycorn
+Categories=Science;Education;
+Keywords=AKTA;ÄKTA;chromatography;FPLC;
+Actions=methods;
+
+[Desktop Action methods]
+Name=Method editor
+Exec=rustycorn --methods

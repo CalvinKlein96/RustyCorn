@@ -1,0 +1,20 @@
+[package]
+name = "rc-protocol"
+description = "Serial link layer (HDLC-like) and OPC decoding for the ÄKTAprime; acquisition control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rc-core.workspace = true
+rc-methods.workspace = true
+serialport.workspace = true
+parking_lot.workspace = true
+crossbeam-channel.workspace = true
+chrono.workspace = true
+log.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

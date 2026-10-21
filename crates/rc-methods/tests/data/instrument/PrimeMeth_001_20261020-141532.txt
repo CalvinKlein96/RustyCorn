@@ -1,0 +1,29 @@
+*****************************************************************
+** Method Dump
+**
+** AKTAprime   Ver  , V2.01               
+**
+** Dump Format Ver  , V1.00               
+**
+*****************************************************************
+
+
+******************
+** Method Settings
+******************
+Method Type        ,Manaul Method
+Method             ,1
+Method base        ,ml
+Frac base          ,ml
+Max pressure (kPa) ,1000
+Alarm (min/ml)     ,0.0
+
+*********************
+** Method Breakpoints
+*********************
+                     
+Brkp Volume   Conc Flow  Frac   Buff Inj    Peak   Autozero Eventmark
+                                          (mAu/min)
+
+,1   ,0.0     ,0   ,0.5  ,0.0   ,1   ,Load  ,0     ,N       ,N
+,2   ,99999.9 ,0   ,0.5  ,0.0   ,1   ,Load  ,0     ,N       ,N

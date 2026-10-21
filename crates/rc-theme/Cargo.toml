@@ -1,0 +1,13 @@
+[package]
+name = "rc-theme"
+description = "Studio-style egui theme, fonts and small widgets (cards, chips)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+egui.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

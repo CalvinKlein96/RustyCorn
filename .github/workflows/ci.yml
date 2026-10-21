@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+
+  windows:
+    name: Windows (cross-build with mingw)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+          components: clippy
+      - name: Install mingw-w64
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mingw-w64 zip
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-gnu
+      - name: Clippy (Windows target)
+        run: cargo clippy --workspace --all-targets --locked --target x86_64-pc-windows-gnu -- -D warnings
+      - name: Build the Windows bundle
+        env:
+          CARGO_TARGET_DIR: target
+        run: packaging/windows/make_bundle.sh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RustyCorn-windows
+          path: dist/*.zip
+          if-no-files-found: error

@@ -1,0 +1,35 @@
+# Akta PRIME data log started 2026-10-20T11:44:29.754
+wall_time,cum_time_ms,cum_vol_mL,type,uv_AU,cond_mScm,ph,pctb_pct,pres_MPa,temp_degC,message
+2026-10-20T11:44:30.968,0.0,0.000000,EVT_INFO,,,,,,,"Sample: Water"
+
+   
+2026-10-20T11:44:31,10.0,0.100000,TREND,0.00000100,0.0160,15.13,0.00,0.0280,6.50,
+x,20.0,0.2, TREND ,1,2,3,4,5,6
+x,30.0,0.3,TREND,1,2,3,4,5
+x,40.0,0.4,TREND,bad,,3, 4 ,5e0,Inf,
+x,abc,0.4,TREND,1,2,3,4,5,6,
+x,50.0,,TREND,1,2,3,4,5,6,
+x, 60.0 , 0.6 ,TREND,1,2,3,4,5,6,extra,fields,here
+x,70.0,0.7
+x,80.0,0.8,UNKNOWN,,,,,,,"ignored"
+# a comment in the middle
+wall_time again
+x,90.0,0.9,EVT_LOG,,,,,,,"Fraction size 1.0 ml"
+x,95.0,0.95,EVT_LOG,,,,,,,"  Fraction size 1.0 ml  "
+x,100.0,1.0,EVT_TUBEFEED,,,,,,,"Feed Tube Nr 2"
+x,110.0,1.1,EVT_MARK,,,,,,,"Feed Tube Nr 5"
+x,120.0,1.2,EVT_LOG,,,,,,,"prefix Feed Tube Nr 3 suffix"
+x,130.0,1.3,EVT_LOG,,,,,,,"Fraction size 2.5 ml; Feed Tube Nr 4"
+x,140.0,1.4,EVT_LOG,,,,,,,"fraction SIZE 0 ML"
+x,150.0,1.5,EVT_LOG,,,,,,,"Feed Tube Nr 0"
+x,160.0,1.6,EVT_LOG,,,,,,,Fraction size 0.5 ml
+x,170.0,1.7,EVT_LOG,,,,,,,"Feed Tube Nr 6"
+x,180.0,1.8,EVT_LOG,,,,,,,"message, with, commas"
+x,190.0,1.9,EVT_LOG,,,,,,
+x,200.0,2.0,EVT_LOG
+x,210.0,2.1, EVT_STEP ,,,,,,,  """triple"""  
+x,220.0,2.2,EVT_LOG,,,,,,,"Fraction size 1.5 ml"
+x,230.0,2.3,TREND,0.5,1,2,3,4,5,
+x,240.0,2.4,EVT_LOG,,,,,,,"Fraction size 2 ml"
+x,250.0,2.5,EVT_RUN_STATE,,,,,,,"Run state: End  inject=IV_LOAD"
+x,260.0,2.6,TREND,9,9,9,9,9,9,

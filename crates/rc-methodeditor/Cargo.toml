@@ -1,0 +1,19 @@
+[package]
+name = "rc-methodeditor"
+description = "Method editor page: list, edit and save methods for the ÄKTAprime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rc-core.workspace = true
+rc-methods.workspace = true
+rc-theme.workspace = true
+egui.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+eframe.workspace = true
+env_logger.workspace = true

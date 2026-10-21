@@ -1,0 +1,67 @@
+[workspace]
+resolver = "3"
+members = [
+    "app",
+    "crates/rc-core",
+    "crates/rc-methods",
+    "crates/rc-protocol",
+    "crates/rc-plotdata",
+    "crates/rc-export",
+    "crates/rc-theme",
+    "crates/rc-panels",
+    "crates/rc-runview",
+    "crates/rc-methodeditor",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.95"
+authors = ["Calvin Klein"]
+repository = "https://github.com/CalvinKlein96/RustyCorn"
+homepage = "https://github.com/CalvinKlein96/RustyCorn"
+readme = "README.md"
+
+[workspace.dependencies]
+rc-core = { path = "crates/rc-core" }
+rc-methods = { path = "crates/rc-methods" }
+rc-protocol = { path = "crates/rc-protocol" }
+rc-plotdata = { path = "crates/rc-plotdata" }
+rc-export = { path = "crates/rc-export" }
+rc-theme = { path = "crates/rc-theme" }
+rc-panels = { path = "crates/rc-panels" }
+rc-runview = { path = "crates/rc-runview" }
+rc-methodeditor = { path = "crates/rc-methodeditor" }
+
+eframe = "0.37"
+egui = "0.37"
+egui_plot = "0.38"
+# no default features: the "libudev" one needs libudev-dev to build on Linux, and
+# ports are opened by path (the app lists them from sysfs there)
+serialport = { version = "4.10", default-features = false }
+rfd = "0.17"
+parking_lot = "0.12"
+chrono = "0.4"
+regex = "1.13"
+serde = { version = "1", features = ["derive"] }
+toml = "1.1"
+dirs = "7"
+svg2pdf = "0.13"
+crossbeam-channel = "0.5"
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1"
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+
+# Fast debug builds that still run the GUI smoothly.
+[profile.dev]
+opt-level = 1
+[profile.dev.package."*"]
+opt-level = 2

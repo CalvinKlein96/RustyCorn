@@ -1,0 +1,17 @@
+[package]
+name = "rc-panels"
+description = "Run-view side panels: run card, readings, flow-path schematic, run log, status bar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rc-core.workspace = true
+rc-plotdata.workspace = true
+rc-theme.workspace = true
+egui.workspace = true
+
+[dev-dependencies]
+eframe.workspace = true
+tempfile.workspace = true

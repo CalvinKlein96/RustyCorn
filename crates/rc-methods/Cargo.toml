@@ -1,0 +1,16 @@
+[package]
+name = "rc-methods"
+description = "ÄKTAprime method text: dump parsing, method files and the PC method store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rc-core.workspace = true
+regex.workspace = true
+log.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
