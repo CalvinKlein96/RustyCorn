@@ -1,10 +1,22 @@
 //! Command line: no argument starts the live window, a
 //! serial port overrides the saved one, a `.csv` file opens a read-only viewer
-//! and `--methods` only the method editor.
+//! and `--methods` only the method editor. `--gpu <backend>` (with any of
+//! them) chooses the graphics backend and is remembered.
 
 use std::path::PathBuf;
 
-pub const USAGE: &str = "Usage: rustycorn [serial_port | logfile.csv | --methods]";
+use rc_core::settings::GpuBackend;
+
+pub const USAGE: &str =
+    "Usage: rustycorn [--gpu auto|gl|dx12|vulkan|metal] [serial_port | logfile.csv | --methods]";
+
+/// The parsed command line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Args {
+    pub command: Command,
+    /// `--gpu`: replaces the saved graphics backend (and is saved)
+    pub gpu_backend: Option<GpuBackend>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -27,14 +39,44 @@ pub fn is_logfile_arg(arg: &str) -> bool {
     arg.to_lowercase().ends_with(".csv")
 }
 
-/// The command for the arguments after the program name.
-pub fn parse_args<S: AsRef<str>>(args: &[S]) -> Command {
+/// The arguments after the program name: `--gpu <backend>` or
+/// `--gpu=<backend>` anywhere, at most once, and the command.
+pub fn parse_args<S: AsRef<str>>(args: &[S]) -> Args {
+    let usage = Args {
+        command: Command::Usage,
+        gpu_backend: None,
+    };
+    let mut rest = Vec::new();
+    let mut gpu_backend = None;
+    let mut it = args.iter().map(AsRef::as_ref);
+    while let Some(arg) = it.next() {
+        let value = match arg.strip_prefix("--gpu") {
+            Some("") => it.next(),
+            Some(v) if v.starts_with('=') => Some(&v[1..]),
+            _ => {
+                rest.push(arg);
+                continue;
+            }
+        };
+        match value.and_then(GpuBackend::parse) {
+            Some(b) if gpu_backend.is_none() => gpu_backend = Some(b),
+            _ => return usage,
+        }
+    }
+    Args {
+        command: parse_command(&rest),
+        gpu_backend,
+    }
+}
+
+/// The command for the arguments other than `--gpu`.
+fn parse_command(args: &[&str]) -> Command {
     match args {
         [] => Command::Live {
             serial_override: None,
         },
         [arg] => {
-            let arg = arg.as_ref();
+            let arg = *arg;
             match arg {
                 "--methods" => Command::Methods,
                 "-h" | "--help" => Command::Help,
@@ -56,10 +98,66 @@ pub fn parse_args<S: AsRef<str>>(args: &[S]) -> Command {
 mod tests {
     use super::*;
 
+    fn parse_command<S: AsRef<str>>(args: &[S]) -> Command {
+        let parsed = parse_args(args);
+        assert_eq!(parsed.gpu_backend, None);
+        parsed.command
+    }
+
+    #[test]
+    fn gpu_backend_with_any_command() {
+        let gl = Some(GpuBackend::Gl);
+        let live = Command::Live {
+            serial_override: None,
+        };
+        assert_eq!(
+            parse_args(&["--gpu", "gl"]),
+            Args {
+                command: live.clone(),
+                gpu_backend: gl
+            }
+        );
+        assert_eq!(parse_args(&["--gpu=OpenGL"]).gpu_backend, gl);
+        assert_eq!(
+            parse_args(&["COM3", "--gpu", "dx12"]),
+            Args {
+                command: Command::Live {
+                    serial_override: Some("COM3".into())
+                },
+                gpu_backend: Some(GpuBackend::Dx12)
+            }
+        );
+        assert_eq!(
+            parse_args(&["--gpu", "vulkan", "run.csv"]).command,
+            Command::Replay(PathBuf::from("run.csv"))
+        );
+        assert_eq!(
+            parse_args(&["--gpu=auto", "--methods"]),
+            Args {
+                command: Command::Methods,
+                gpu_backend: Some(GpuBackend::Auto)
+            }
+        );
+    }
+
+    #[test]
+    fn bad_gpu_options_print_the_usage() {
+        for args in [
+            &["--gpu"][..],
+            &["--gpu", "glide"],
+            &["--gpu="],
+            &["--gpu", "gl", "--gpu", "dx12"],
+            &["--gpux"],
+            &["--gpu", "gl", "COM3", "run.csv"],
+        ] {
+            assert_eq!(parse_args(args).command, Command::Usage, "{args:?}");
+        }
+    }
+
     #[test]
     fn no_arguments_start_live() {
         assert_eq!(
-            parse_args::<&str>(&[]),
+            parse_command::<&str>(&[]),
             Command::Live {
                 serial_override: None
             }
@@ -69,13 +167,13 @@ mod tests {
     #[test]
     fn a_port_overrides_the_saved_one() {
         assert_eq!(
-            parse_args(&["/dev/ttyUSB1"]),
+            parse_command(&["/dev/ttyUSB1"]),
             Command::Live {
                 serial_override: Some("/dev/ttyUSB1".into())
             }
         );
         assert_eq!(
-            parse_args(&["COM3"]),
+            parse_command(&["COM3"]),
             Command::Live {
                 serial_override: Some("COM3".into())
             }
@@ -85,11 +183,11 @@ mod tests {
     #[test]
     fn csv_files_open_the_viewer() {
         assert_eq!(
-            parse_args(&["run.csv"]),
+            parse_command(&["run.csv"]),
             Command::Replay(PathBuf::from("run.csv"))
         );
         assert_eq!(
-            parse_args(&["/data/RUN.CSV"]),
+            parse_command(&["/data/RUN.CSV"]),
             Command::Replay(PathBuf::from("/data/RUN.CSV"))
         );
         assert!(is_logfile_arg("a.Csv"));
@@ -98,17 +196,17 @@ mod tests {
 
     #[test]
     fn methods_only() {
-        assert_eq!(parse_args(&["--methods"]), Command::Methods);
+        assert_eq!(parse_command(&["--methods"]), Command::Methods);
     }
 
     #[test]
     fn everything_else_prints_the_usage() {
-        assert_eq!(parse_args(&["--help"]), Command::Help);
-        assert_eq!(parse_args(&["-h"]), Command::Help);
-        assert_eq!(parse_args(&["--method"]), Command::Usage);
-        assert_eq!(parse_args(&["-x"]), Command::Usage);
-        assert_eq!(parse_args(&[" "]), Command::Usage);
-        assert_eq!(parse_args(&["COM3", "run.csv"]), Command::Usage);
-        assert_eq!(parse_args(&["--methods", "COM3"]), Command::Usage);
+        assert_eq!(parse_command(&["--help"]), Command::Help);
+        assert_eq!(parse_command(&["-h"]), Command::Help);
+        assert_eq!(parse_command(&["--method"]), Command::Usage);
+        assert_eq!(parse_command(&["-x"]), Command::Usage);
+        assert_eq!(parse_command(&[" "]), Command::Usage);
+        assert_eq!(parse_command(&["COM3", "run.csv"]), Command::Usage);
+        assert_eq!(parse_command(&["--methods", "COM3"]), Command::Usage);
     }
 }

@@ -1,11 +1,15 @@
-//! User settings. Stored as TOML in the user config folder
-//! (`<config>/RustyCorn/settings.toml`); the folder can be overridden with the
+//! User settings, stored as TOML in `settings.toml` in the settings folder
+//! ([`config_dir`]): on Windows the folder of the program file, so one folder
+//! holds RustyCorn with its settings and (by default) its data; elsewhere the
+//! user config folder (`<config>/RustyCorn`), unless a `settings.toml` lies
+//! next to the program. The folder can be overridden with the
 //! `RUSTYCORN_CONFIG_DIR` environment variable (or, in tests,
 //! [`set_config_dir_override`]), which every test must use so the user's real
 //! settings are never touched.
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -28,6 +32,90 @@ pub const VOLUME_UNIT_OPTIONS: [(f64, &str); 2] = [
 /// Environment variable that overrides the settings folder (tests, portable use).
 pub const CONFIG_DIR_ENV: &str = "RUSTYCORN_CONFIG_DIR";
 
+/// Name of the settings file in the settings folder.
+pub const SETTINGS_FILE: &str = "settings.toml";
+
+/// The graphics interface the window is drawn with. `Auto` lets wgpu try every
+/// one the system offers; a driver that crashes while it is being tried takes
+/// the program down with it (no error, the window never opens), so the others
+/// use only that one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GpuBackend {
+    Auto,
+    Vulkan,
+    Dx12,
+    Metal,
+    Gl,
+}
+
+impl GpuBackend {
+    pub const ALL: [GpuBackend; 5] = [
+        GpuBackend::Auto,
+        GpuBackend::Vulkan,
+        GpuBackend::Dx12,
+        GpuBackend::Metal,
+        GpuBackend::Gl,
+    ];
+
+    /// The name in settings.toml and on the command line.
+    pub fn name(self) -> &'static str {
+        match self {
+            GpuBackend::Auto => "auto",
+            GpuBackend::Vulkan => "vulkan",
+            GpuBackend::Dx12 => "dx12",
+            GpuBackend::Metal => "metal",
+            GpuBackend::Gl => "gl",
+        }
+    }
+
+    /// The name shown on the Settings page.
+    pub fn label(self) -> &'static str {
+        match self {
+            GpuBackend::Auto => "Automatic",
+            GpuBackend::Vulkan => "Vulkan",
+            GpuBackend::Dx12 => "DirectX 12",
+            GpuBackend::Metal => "Metal",
+            GpuBackend::Gl => "OpenGL",
+        }
+    }
+
+    /// From its name, in any case; "opengl" is taken for "gl".
+    pub fn parse(text: &str) -> Option<GpuBackend> {
+        let text = text.trim().to_lowercase();
+        if text == "opengl" {
+            return Some(GpuBackend::Gl);
+        }
+        GpuBackend::ALL.into_iter().find(|b| b.name() == text)
+    }
+
+    /// OpenGL on Windows, where probing every interface crashed in some
+    /// graphics drivers; elsewhere wgpu's own choice.
+    pub fn platform_default() -> GpuBackend {
+        if cfg!(target_os = "windows") {
+            GpuBackend::Gl
+        } else {
+            GpuBackend::Auto
+        }
+    }
+
+    /// The choices that exist on this system (for the Settings page).
+    pub fn choices() -> &'static [GpuBackend] {
+        if cfg!(target_os = "windows") {
+            &[
+                GpuBackend::Auto,
+                GpuBackend::Gl,
+                GpuBackend::Dx12,
+                GpuBackend::Vulkan,
+            ]
+        } else if cfg!(target_os = "macos") {
+            &[GpuBackend::Auto, GpuBackend::Metal]
+        } else {
+            &[GpuBackend::Auto, GpuBackend::Gl, GpuBackend::Vulkan]
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -38,7 +126,7 @@ pub struct Settings {
     pub volume_unit_ul: f64,
     /// CSV files are named <prefix>_<date>_<time>.csv
     pub log_prefix: String,
-    /// folder for log files and plots; "" = current folder
+    /// folder for log files and plots; "" = [`default_data_dir`]
     pub data_dir: String,
     /// folder of the methods stored on the PC (PrimeMeth_NNN.txt, names.txt,
     /// run setups); "" = `<data folder>/methods`.
@@ -54,6 +142,8 @@ pub struct Settings {
     pub start_panels: Vec<String>,
     /// also save every instrument message (_raw.txt) and method dumps (.met)
     pub save_raw: bool,
+    /// graphics interface of the window; applies at the next start
+    pub gpu_backend: GpuBackend,
 }
 
 impl Default for Settings {
@@ -70,6 +160,7 @@ impl Default for Settings {
             last_user: String::new(),
             start_panels: ALL_PANELS.iter().map(|s| s.to_string()).collect(),
             save_raw: false,
+            gpu_backend: GpuBackend::platform_default(),
         }
     }
 }
@@ -105,7 +196,8 @@ pub fn set_config_dir_override(dir: Option<PathBuf>) {
     *CONFIG_DIR_OVERRIDE.write() = dir;
 }
 
-/// `<config>/RustyCorn` or `$RUSTYCORN_CONFIG_DIR`.
+/// The settings folder: `$RUSTYCORN_CONFIG_DIR`, else the program's folder
+/// ([`portable_dir`]), else `<config>/RustyCorn`.
 pub fn config_dir() -> PathBuf {
     if let Some(dir) = CONFIG_DIR_OVERRIDE.read().clone() {
         return dir;
@@ -113,14 +205,110 @@ pub fn config_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os(CONFIG_DIR_ENV).filter(|d| !d.is_empty()) {
         return PathBuf::from(dir);
     }
+    portable_dir().unwrap_or_else(user_config_dir)
+}
+
+/// `<config>/RustyCorn`: `%APPDATA%\RustyCorn`, `~/.config/RustyCorn`, …
+fn user_config_dir() -> PathBuf {
     dirs::config_dir()
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."))
         .join(crate::APP_NAME)
 }
 
+/// The folder of the program file when RustyCorn keeps its settings (and by
+/// default its data) there: on Windows always, so the unpacked folder holds
+/// everything; elsewhere only when a settings.toml lies next to the program
+/// (an installed program must not write into `~/.local/bin`). None when that
+/// folder cannot be written to.
+pub fn portable_dir() -> Option<PathBuf> {
+    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let exe = std::env::current_exe().ok()?;
+        portable_dir_for(exe.parent()?, cfg!(target_os = "windows"))
+    })
+    .clone()
+}
+
+/// [`portable_dir`] for a program in `dir`; `always`: also without a settings file there.
+fn portable_dir_for(dir: &Path, always: bool) -> Option<PathBuf> {
+    if dir.join(SETTINGS_FILE).is_file() {
+        return Some(dir.to_path_buf());
+    }
+    if !always {
+        return None;
+    }
+    match is_writable(dir) {
+        Ok(()) => Some(dir.to_path_buf()),
+        Err(err) => {
+            log::warn!(
+                "Cannot write to the program folder {} ({err}) — the settings are kept in {}",
+                dir.display(),
+                user_config_dir().display()
+            );
+            None
+        }
+    }
+}
+
+/// Whether a file can be created in `dir` (it is removed again).
+fn is_writable(dir: &Path) -> io::Result<()> {
+    let probe = dir.join(format!(".rustycorn-write-test-{}", std::process::id()));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)?;
+    std::fs::remove_file(&probe)
+}
+
+/// The first time RustyCorn keeps its settings in the program folder, copy
+/// those of an earlier start from the user config folder (`%APPDATA%\RustyCorn`)
+/// there, so nothing has to be set again; the old file is left alone. Returns
+/// the file copied.
+pub fn adopt_user_settings() -> Option<PathBuf> {
+    let portable = portable_dir()?;
+    if config_dir() != portable {
+        return None; // overridden
+    }
+    let old = user_config_dir().join(SETTINGS_FILE);
+    adopt_settings_file(&old, &portable.join(SETTINGS_FILE)).then_some(old)
+}
+
+/// Copy `old` to `target` when there is an `old` and no `target` yet.
+fn adopt_settings_file(old: &Path, target: &Path) -> bool {
+    if target.exists() || !old.is_file() {
+        return false;
+    }
+    match std::fs::copy(old, target) {
+        Ok(_) => {
+            log::info!(
+                "Settings taken over from {} into {}",
+                old.display(),
+                target.display()
+            );
+            true
+        }
+        Err(err) => {
+            log::warn!(
+                "Could not copy the settings {} to {}: {err}",
+                old.display(),
+                target.display()
+            );
+            false
+        }
+    }
+}
+
+/// The data folder when none is chosen: the program's folder when RustyCorn
+/// keeps its settings there ([`portable_dir`]), else the current folder.
+pub fn default_data_dir() -> PathBuf {
+    portable_dir()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 pub fn settings_path() -> PathBuf {
-    config_dir().join("settings.toml")
+    config_dir().join(SETTINGS_FILE)
 }
 
 /// Load the settings; missing file or fields fall back to the defaults.
@@ -222,16 +410,15 @@ pub fn save_settings_to(s: &Settings, path: &Path) -> io::Result<()> {
 
 impl Settings {
     /// The data folder in use: the saved one if it exists or can be created, else
-    /// the current folder.
+    /// [`default_data_dir`].
     pub fn data_dir(&self) -> PathBuf {
-        let cwd = || std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         if self.data_dir.is_empty() {
-            return cwd();
+            return default_data_dir();
         }
         match std::fs::create_dir_all(&self.data_dir) {
             Ok(()) => PathBuf::from(&self.data_dir),
             Err(err) => {
-                let here = cwd();
+                let here = default_data_dir();
                 log::warn!(
                     "Data folder {} is not usable — saving to {} instead: {err}",
                     self.data_dir,
@@ -291,6 +478,7 @@ fn settings_from_table(t: &toml::Table, source: &str, invalid: &mut Vec<String>)
             .map(|x| x.as_str().map(str::to_string))
             .collect::<Option<Vec<_>>>()
     };
+    let gpu = |v: &toml::Value| v.as_str().and_then(GpuBackend::parse);
 
     Settings {
         demo_mode: table_field(t, "demo_mode", &boolean, d.demo_mode, source, invalid),
@@ -311,6 +499,7 @@ fn settings_from_table(t: &toml::Table, source: &str, invalid: &mut Vec<String>)
         last_user: table_field(t, "last_user", &string, d.last_user, source, invalid),
         start_panels: table_field(t, "start_panels", &panels, d.start_panels, source, invalid),
         save_raw: table_field(t, "save_raw", &boolean, d.save_raw, source, invalid),
+        gpu_backend: table_field(t, "gpu_backend", &gpu, d.gpu_backend, source, invalid),
     }
 }
 
@@ -439,6 +628,85 @@ mod tests {
         assert_eq!(s.start_panels, ALL_PANELS);
         #[cfg(target_os = "linux")]
         assert_eq!(s.serial_port, "/dev/ttyUSB0");
+        #[cfg(target_os = "linux")]
+        assert_eq!(s.gpu_backend, GpuBackend::Auto);
+        #[cfg(target_os = "windows")]
+        assert_eq!(s.gpu_backend, GpuBackend::Gl);
+    }
+
+    #[test]
+    fn gpu_backend_names() {
+        for b in GpuBackend::ALL {
+            assert_eq!(GpuBackend::parse(b.name()), Some(b));
+            let text = toml::to_string(&Settings {
+                gpu_backend: b,
+                ..Settings::default()
+            })
+            .unwrap();
+            assert!(
+                text.contains(&format!("gpu_backend = \"{}\"", b.name())),
+                "{text}"
+            );
+        }
+        assert_eq!(GpuBackend::parse(" OpenGL "), Some(GpuBackend::Gl));
+        assert_eq!(GpuBackend::parse("DX12"), Some(GpuBackend::Dx12));
+        assert_eq!(GpuBackend::parse("d3d"), None);
+        assert!(GpuBackend::choices().contains(&GpuBackend::Auto));
+        assert!(GpuBackend::choices().contains(&GpuBackend::platform_default()));
+    }
+
+    #[test]
+    fn gpu_backend_in_the_file() {
+        let dir = temp();
+        let path = dir.path().join("settings.toml");
+        std::fs::write(&path, "gpu_backend = \"GL\"\n").unwrap();
+        assert_eq!(load_settings_checked(&path).0.gpu_backend, GpuBackend::Gl);
+        std::fs::write(&path, "gpu_backend = \"glide\"\n").unwrap();
+        let (s, problem) = load_settings_checked(&path);
+        assert_eq!(s.gpu_backend, GpuBackend::platform_default());
+        assert!(problem.unwrap().contains("gpu_backend"));
+    }
+
+    #[test]
+    fn portable_folder() {
+        let dir = temp();
+        // without a settings file: only where always wanted (Windows)
+        assert_eq!(portable_dir_for(dir.path(), false), None);
+        assert_eq!(
+            portable_dir_for(dir.path(), true).as_deref(),
+            Some(dir.path())
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "no probe left"
+        );
+        // a settings file next to the program: everywhere
+        std::fs::write(dir.path().join(SETTINGS_FILE), "").unwrap();
+        assert_eq!(
+            portable_dir_for(dir.path(), false).as_deref(),
+            Some(dir.path())
+        );
+        // a folder that cannot be written to (here: one that does not exist)
+        assert_eq!(portable_dir_for(&dir.path().join("missing"), true), None);
+    }
+
+    #[test]
+    fn earlier_settings_are_adopted_once() {
+        let dir = temp();
+        let old = dir.path().join("appdata").join(SETTINGS_FILE);
+        let target = dir.path().join("program").join(SETTINGS_FILE);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        assert!(!adopt_settings_file(&old, &target), "nothing to adopt");
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, "serial_port = \"COM4\"\n").unwrap();
+        assert!(adopt_settings_file(&old, &target));
+        assert_eq!(load_settings_checked(&target).0.serial_port, "COM4");
+        assert!(old.is_file(), "the old file is kept");
+        // never over existing settings
+        std::fs::write(&old, "serial_port = \"COM9\"\n").unwrap();
+        assert!(!adopt_settings_file(&old, &target));
+        assert_eq!(load_settings_checked(&target).0.serial_port, "COM4");
     }
 
     #[test]
@@ -456,6 +724,7 @@ mod tests {
             refresh_hz: 10.0,
             start_panels: vec!["pH".into()],
             save_raw: true,
+            gpu_backend: GpuBackend::Vulkan,
             ..Settings::default()
         };
         s.last_user = "Alex \"K\", lab 2".into();
@@ -542,7 +811,9 @@ mod tests {
         set_config_dir_override(None);
         assert_ne!(config_dir(), dir.path());
         assert!(
-            config_dir().ends_with(crate::APP_NAME) || std::env::var_os(CONFIG_DIR_ENV).is_some()
+            config_dir().ends_with(crate::APP_NAME)
+                || std::env::var_os(CONFIG_DIR_ENV).is_some()
+                || portable_dir().is_some()
         );
     }
 
@@ -576,7 +847,9 @@ mod tests {
 
     #[test]
     fn data_dir_fallbacks() {
-        let cwd = std::env::current_dir().expect("cwd");
+        let cwd = default_data_dir();
+        #[cfg(target_os = "linux")]
+        assert_eq!(cwd, std::env::current_dir().expect("cwd"));
         assert_eq!(Settings::default().data_dir(), cwd);
         let dir = temp();
         let wanted = dir.path().join("a").join("b");
@@ -586,7 +859,7 @@ mod tests {
         };
         assert_eq!(s.data_dir(), wanted);
         assert!(wanted.is_dir());
-        // a file in the way: not usable, use the current folder
+        // a file in the way: not usable, use the default folder
         let file = dir.path().join("file");
         std::fs::write(&file, "x").expect("write");
         let s = Settings {

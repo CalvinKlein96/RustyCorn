@@ -163,7 +163,16 @@ without notes read the same. Unknown keys and empty values are ignored.
 
 ### Settings
 
-`<config>/RustyCorn/settings.toml`, written via a temporary file and a rename.
+`settings.toml` in `rc_core::settings::config_dir()`: `$RUSTYCORN_CONFIG_DIR`,
+else the folder of the program file (`portable_dir`: always on Windows,
+elsewhere only when a `settings.toml` is already there; not when it cannot be
+written to), else `<config>/RustyCorn`. In the program folder, an empty data
+folder setting also means that folder (`default_data_dir`, otherwise the
+current folder), and the first start copies an earlier
+`<config>/RustyCorn/settings.toml` in (`adopt_user_settings`). Written via a
+temporary file and a rename. `gpu_backend` (also `--gpu`) picks the wgpu
+backends in `app/src/main.rs` (`native_options`); `auto` leaves wgpu's
+default, which probes every backend and honours `WGPU_BACKEND`.
 Missing fields take their defaults; an invalid field takes its default, so one
 bad value never resets the rest. A file that cannot be read, is not valid TOML
 or has invalid values is first copied to `settings.toml.broken-<stamp>`

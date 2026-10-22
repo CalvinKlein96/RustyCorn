@@ -13,6 +13,9 @@ Starting
 --------
 Unzip this folder anywhere (for example into Documents) and double-click
 RustyCorn.exe. Nothing is installed and no administrator rights are needed.
+Everything RustyCorn writes stays in this folder (settings, crash.log and,
+unless you choose another data folder, the logs and methods), so do not
+unzip it into C:\Program Files.
 
 A console window opens first. It shows where the data are saved and asks for
 a log-file prefix (a label such as a sample name or your initials). Press
@@ -28,6 +31,8 @@ From a Command Prompt in this folder:
     RustyCorn.exe COM3         use serial port COM3 (and remember it)
     RustyCorn.exe run.csv      open a saved log, read-only
     RustyCorn.exe --methods    only the method editor (no instrument needed)
+    RustyCorn.exe --gpu gl     draw the window with OpenGL (and remember it);
+                               also dx12, vulkan or auto
 
 To stop, close the main window (or press Ctrl-C in the console).
 
@@ -51,8 +56,7 @@ Data folder
 -----------
 Each run is saved as its own CSV file, <prefix>_<date>_<time>.csv, in the
 data folder. Set it under Settings -> Data folder -> Choose. Until one is set,
-files go to the folder RustyCorn was started from (when double-clicked: this
-folder). Logs that never received data are deleted.
+files go to this folder. Logs that never received data are deleted.
 
 
 Methods folder
@@ -71,9 +75,26 @@ Click "Analyze Run..." to open a saved run, look at it and export it as PDF.
 
 Settings
 --------
-RustyCorn keeps its settings in
-    %APPDATA%\RustyCorn\settings.toml
-Delete that file to start over with the defaults.
+RustyCorn keeps its settings in settings.toml in this folder. Delete that
+file to start over with the defaults. To keep your settings when updating,
+copy settings.toml into the new RustyCorn folder. (Settings of an earlier
+start, in %APPDATA%\RustyCorn, are copied in on the first start.)
+
+
+If the window does not open
+---------------------------
+If RustyCorn closes right after "Link layer started; polling for Akta", or
+says "Could not open the window", the graphics driver could not be used.
+Choose another graphics backend once, in a Command Prompt in this folder:
+
+    RustyCorn.exe --gpu gl       (OpenGL, the default)
+    RustyCorn.exe --gpu dx12     (DirectX 12)
+    RustyCorn.exe --gpu auto     (try all)
+
+The choice is saved (gpu_backend in settings.toml) and can also be changed
+under Settings -> Display -> Graphics backend.
+
+If RustyCorn crashes, the error is also written to crash.log in this folder.
 
 
 Licence

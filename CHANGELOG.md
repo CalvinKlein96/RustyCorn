@@ -4,7 +4,7 @@ All notable changes to RustyCorn are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] - 2026-10-21
+## [0.1.0] - 2026-10-22
 
 First public release.
 
@@ -32,10 +32,15 @@ First public release.
   (`rustycorn run.csv`), and export the plot as PDF.
 - Demo mode with simulated data.
 - Settings page (serial port, volume unit 1 or 10 µL, data and methods
-  folders, raw data capture, theme, refresh rate, panels). A settings file
-  that cannot be read cleanly is kept as `settings.toml.broken-…` and
-  reported, never silently overwritten.
-- Windows bundle (a single `RustyCorn.exe` with README and licences) and a
-  Linux desktop entry and installer.
+  folders, raw data capture, theme, refresh rate, panels, graphics backend).
+  A settings file that cannot be read cleanly is kept as
+  `settings.toml.broken-…` and reported, never silently overwritten.
+- Graphics backend choice (`gpu_backend` in the settings file, or
+  `--gpu auto|gl|dx12|vulkan|metal`, which is remembered). OpenGL is the
+  default on Windows, where probing every graphics interface crashed in some
+  graphics drivers.
+- Windows bundle (a single `RustyCorn.exe` with README and licences) that
+  keeps its settings, `crash.log` and, by default, its data in its own folder;
+  a Linux desktop entry and installer.
 
 [0.1.0]: https://github.com/CalvinKlein96/RustyCorn/releases/tag/v0.1.0

@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use egui::{RichText, Ui};
-use rc_core::settings::{self, ALL_PANELS, REFRESH_HZ, REFRESH_OPTIONS, VOLUME_UNIT_OPTIONS};
+use rc_core::settings::{
+    self, ALL_PANELS, GpuBackend, REFRESH_HZ, REFRESH_OPTIONS, VOLUME_UNIT_OPTIONS,
+};
 use rc_protocol::Acquisition;
 use rc_theme::{FS_BODY, FS_SMALL, mono, palette};
 
@@ -630,6 +632,36 @@ impl SettingsPage {
                 panels_text(&acq.settings.start_panels)
             );
             self.changed(acq, msg, false);
+        }
+        row_separator(ui);
+
+        let note = "How the window is drawn. Change it if the window does not open or the \
+                    program closes right after starting (also: RustyCorn --gpu gl). \
+                    Applies at the next start.";
+        let current = acq.settings.gpu_backend;
+        let mut chosen = None;
+        setting_row(ui, "Graphics backend", note, CONTROL_WIDTH, |ui| {
+            egui::ComboBox::from_id_salt("gpu-backend")
+                .width(FIELD_WIDTH + 30.0)
+                .selected_text(current.label())
+                .show_ui(ui, |ui| {
+                    for &b in GpuBackend::choices() {
+                        if ui.selectable_label(b == current, b.label()).clicked() {
+                            chosen = Some(b);
+                        }
+                    }
+                });
+        });
+        if let Some(b) = chosen.filter(|&b| b != current) {
+            acq.settings.gpu_backend = b;
+            self.changed(
+                acq,
+                format!(
+                    "Graphics backend set to {}; applies at the next start.",
+                    b.label()
+                ),
+                false,
+            );
         }
     }
 }

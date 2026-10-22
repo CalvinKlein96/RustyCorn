@@ -147,6 +147,7 @@ bare executable.
 | `rustycorn /dev/ttyUSB0` or `rustycorn COM3` | Use this serial port; it is saved for next time. |
 | `rustycorn run.csv` | Open a saved log in a read-only viewer, without connecting to the instrument. |
 | `rustycorn --methods` | Only the method editor: no serial connection, no log file. For preparing methods away from the instrument. |
+| `rustycorn --gpu gl` | Draw the window with this graphics backend (`auto`, `gl`, `dx12`, `vulkan`, `metal`); it is saved for next time. Combines with the others, e.g. `rustycorn --gpu gl COM3`. |
 | `rustycorn --help` | Print the usage. |
 
 From the source folder, `./RustyCorn.sh` takes the same arguments. On
@@ -196,6 +197,7 @@ Click **Settings** in the top bar. Every change is saved at once.
 | Dark mode | Dark or light colours (PDF exports are always light). |
 | Display refresh | How often live plots redraw; data are always recorded in full. |
 | Panels shown at start | Which plots are on when the program starts or a run is opened (UV is always shown). |
+| Graphics backend | How the window is drawn: Automatic, OpenGL, DirectX 12, Vulkan or Metal (as the system offers). OpenGL is the default on Windows, Automatic elsewhere. Applies at the next start; see [Troubleshooting](#troubleshooting). |
 
 <img src="assets/screenshots/dark-mode.png" alt="RustyCorn in dark mode during a demo run with fractions" width="720">
 
@@ -205,11 +207,21 @@ The settings file is
 
 | System | Location |
 |---|---|
+| Windows | `settings.toml` next to `RustyCorn.exe` |
 | Linux | `~/.config/RustyCorn/settings.toml` (or `$XDG_CONFIG_HOME/RustyCorn/`) |
-| Windows | `%APPDATA%\RustyCorn\settings.toml` |
 | macOS | `~/Library/Application Support/RustyCorn/settings.toml` |
 
-Delete it to start over with the defaults. If the file cannot be read
+On Windows the folder of `RustyCorn.exe` holds everything: the settings,
+`crash.log` and, until another data folder is chosen, the logs and the
+methods folder. Copy or move that folder and everything goes with it; to keep
+the settings when updating, copy `settings.toml` into the new folder. On the
+first start in a folder, settings of an earlier start from
+`%APPDATA%\RustyCorn\settings.toml` are copied in. (If the folder cannot be
+written to, e.g. under `C:\Program Files`, `%APPDATA%\RustyCorn` is used.) On
+Linux and macOS the same happens when a `settings.toml` lies next to the
+program.
+
+Delete the settings file to start over with the defaults. If the file cannot be read
 cleanly (edited by hand and broken, or a value out of range), RustyCorn keeps
 a copy of it as `settings.toml.broken-<date>-<time>` next to it, uses the
 defaults for what it could not read, and says so in the top bar, so nothing
@@ -223,8 +235,8 @@ without touching the real settings.
   per run, `<prefix>_<date>_<time>.csv`, the raw captures and method dumps of
   **Save raw instrument data**, and the PDFs saved with **Save PDF** in the
   Live tab (an opened log's PDFs go next to that log). Until one is
-  chosen, the folder RustyCorn was started from is used (for a double-click on
-  Windows, the folder of `RustyCorn.exe`). A new data folder is used from the
+  chosen, the folder of `RustyCorn.exe` is used on Windows, and elsewhere the
+  folder RustyCorn was started from. A new data folder is used from the
   next log on.
 - **Methods folder** (Settings → Folders → Methods folder → Choose…): the
   methods stored on the PC, `PrimeMeth_001.txt` … `PrimeMeth_999.txt` (the
@@ -462,14 +474,19 @@ instrument data**. From the next log on, every instrument message is saved to
 `<log>_raw.txt` and each method dump to `<log>_method_N.met` next to the CSV.
 Send these with the CSV when reporting a problem.
 
-**The window does not open** ("Could not open the window"): the graphics
-driver could not be used. Try another backend, e.g.
-`WGPU_BACKEND=gl rustycorn` (Linux) or `set WGPU_BACKEND=gl` then
-`RustyCorn.exe` (Windows); other values are `vulkan` and `dx12`.
+**The window does not open, or RustyCorn closes right after starting**
+(after "Link layer started", without a message, or with "Could not open the
+window"): the graphics driver could not be used. Choose another graphics
+backend once with `rustycorn --gpu gl` (Windows: `RustyCorn.exe --gpu gl` in
+a Command Prompt); other values are `dx12`, `vulkan`, `metal` and `auto`. It
+is saved as `gpu_backend` in the settings file and can also be changed under
+Settings → Display → Graphics backend. The backend in use is printed at the
+start ("Graphics: … via …"). With `auto`, the `WGPU_BACKEND` environment
+variable is honoured.
 
 **RustyCorn crashed:** the error is printed on the console and also appended
 to `crash.log` in the settings folder (`~/.config/RustyCorn/crash.log` on
-Linux, `%APPDATA%\RustyCorn\crash.log` on Windows). On Windows a console
+Linux, next to `RustyCorn.exe` on Windows). On Windows a console
 window opened by a double-click stays open until you press Enter. Please
 attach `crash.log` to a bug report.
 
