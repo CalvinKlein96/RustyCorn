@@ -229,7 +229,7 @@ pub struct AppState {
     /// why the live log could not be created (`log` stays None and nothing is
     /// recorded while data keep coming); None when the log is open or not wanted
     pub log_error: Option<String>,
-    /// base name for rolled-over log files ("<prefix>_<timestamp>.csv" per run)
+    /// base name for rolled-over log files ("<timestamp>_<prefix>.csv" per run)
     pub log_prefix: String,
     /// folder for log files and exported plots ("" = current folder)
     pub log_dir: PathBuf,
@@ -257,6 +257,9 @@ pub struct AppState {
 
     /// µL per instrument volume count: 1 for ÄKTAprime, 10 for ÄKTAprime plus
     pub volume_unit_ul: f64,
+    /// delay volume (mL) between the UV cell and the fraction collector; 0 = none
+    /// (see `end_fractionation`)
+    pub fraction_delay_ml: f64,
     /// connection state for the GUI top/status bar
     pub status: String,
     /// true while a live source (link or demo) is feeding this state
@@ -292,12 +295,25 @@ impl Default for AppState {
             last_loaded_method: 0,
             pending_method_event: None,
             volume_unit_ul: crate::DEFAULT_VOLUME_UNIT_UL,
+            fraction_delay_ml: 0.0,
             status: String::new(),
             live: false,
             demo: false,
             generation: 0,
         }
     }
+}
+
+/// Time (ms) at which the trend reached volume `vol` (mL), interpolated between
+/// the points around it; None outside the trend.
+fn time_at_volume(trend: &[TrendPoint], vol: f64) -> Option<f64> {
+    let i = trend.partition_point(|p| p.cum_vol_ml < vol);
+    let (a, b) = (trend.get(i.checked_sub(1)?)?, trend.get(i)?);
+    if b.cum_vol_ml <= a.cum_vol_ml {
+        return Some(b.cum_time_ms);
+    }
+    let f = (vol - a.cum_vol_ml) / (b.cum_vol_ml - a.cum_vol_ml);
+    Some(a.cum_time_ms + f * (b.cum_time_ms - a.cum_time_ms))
 }
 
 impl AppState {
@@ -379,6 +395,74 @@ impl AppState {
             self.touch();
         }
         changed
+    }
+
+    /// A tube feed with the instrument's tube number: tube `n` from now on. An
+    /// ÄKTAprime sends tube 0 when fractionation ends (the collector leaves the
+    /// last tube, just before "Fraction Off"): that is no new tube and changes
+    /// nothing; "Fraction Off" or size 0 closes the fraction.
+    pub fn feed_tube(&mut self, n: i64) {
+        if n >= 1 {
+            self.inst.fraction_number = n;
+            self.update_fraction_state();
+        }
+        self.touch();
+    }
+
+    /// A tube feed without a tube number: from logs written before the number
+    /// was recorded ("Tubefeed event (10 bytes)") or a short message. The tubes
+    /// are counted: a feed before anything was collected in this run selects
+    /// tube 1, every later one the next tube. Returns the tube number. (The
+    /// feed sent when fractionation stops is no tube: see
+    /// `csvlog::is_stop_feed`.)
+    pub fn feed_next_tube(&mut self) -> i64 {
+        // (tested with a real instrument log in csvlog)
+        if !self.fractions.is_empty() {
+            self.inst.fraction_number += 1;
+        }
+        self.update_fraction_state();
+        self.touch();
+        self.inst.fraction_number
+    }
+
+    /// The run ended and the pump stopped. An open fraction ends here (the
+    /// method's last breakpoint sends no "Fraction Off"). The ÄKTAprime moves
+    /// its rack `fraction_delay_ml` after each fraction boundary it reports, so
+    /// a tube holds what passed the UV cell between two boundaries; but what
+    /// passed it in the last `fraction_delay_ml` is still in the tubing to the
+    /// collector when the pump stops and reaches no tube. The fractions are
+    /// cut there: a tube that would only have started after it stays empty
+    /// (no length).
+    pub fn end_fractionation(&mut self) {
+        if self.inst.current_fraction_idx.is_some() {
+            self.inst.fraction_vol_ml = 0.0;
+            self.update_fraction_state();
+        }
+        if self.fraction_delay_ml <= 0.0 {
+            return;
+        }
+        let cut = self.inst.cum_vol_ml - self.fraction_delay_ml;
+        let trend_time = time_at_volume(&self.trend, cut);
+        for f in &mut self.fractions {
+            let (Some(end_vol), Some(end_time)) = (f.end_vol_ml, f.end_time_ms) else {
+                continue;
+            };
+            if end_vol <= cut {
+                continue;
+            }
+            if f.start_vol_ml >= cut {
+                f.end_vol_ml = Some(f.start_vol_ml);
+                f.end_time_ms = Some(f.start_time_ms);
+            } else {
+                // without trend data: at the fraction's own (constant) flow
+                let own = f.start_time_ms
+                    + (cut - f.start_vol_ml) / (end_vol - f.start_vol_ml)
+                        * (end_time - f.start_time_ms);
+                f.end_vol_ml = Some(cut);
+                f.end_time_ms = Some(trend_time.unwrap_or(own));
+            }
+        }
+        self.touch();
     }
 
     /// Clear all per-run state so a fresh run starts from an empty display:

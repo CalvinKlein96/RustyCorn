@@ -47,6 +47,9 @@ Choosing the COM port
    list or type it (e.g. COM3) and press Enter.
 4. Volume unit: 1 µL per count for an ÄKTAprime, 10 µL per count for an
    ÄKTAprime plus. If volumes and flow rates are 10x off, change this.
+5. Fraction delay volume: the delay volume set on the instrument (default
+   580 µL). What passed the UV cell in it before a run ends reaches no
+   tube, so the last fractions shown are cut there.
 
 Only one program can use a COM port at a time: close any other program that
 uses the instrument (such as PrimeView) before starting RustyCorn.
@@ -54,7 +57,7 @@ uses the instrument (such as PrimeView) before starting RustyCorn.
 
 Data folder
 -----------
-Each run is saved as its own CSV file, <prefix>_<date>_<time>.csv, in the
+Each run is saved as its own CSV file, <date>_<time>_<prefix>.csv, in the
 data folder. Set it under Settings -> Data folder -> Choose. Until one is set,
 files go to this folder. Logs that never received data are deleted.
 

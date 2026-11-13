@@ -39,9 +39,10 @@ pub struct ExportRequest {
     pub highlighted: Option<Channel>,
     /// optional title line (e.g. the log file name)
     pub title: Option<String>,
-    /// which event lines are drawn (the run page's "Events" choice); fraction
-    /// spans and numbers are drawn in every setting
+    /// which event lines are drawn (the run page's "Events" choice)
     pub events_shown: EventDisplay,
+    /// fraction shading and numbers (the run page's "Fractions" switch)
+    pub show_fractions: bool,
 }
 
 impl Default for ExportRequest {
@@ -58,15 +59,17 @@ impl Default for ExportRequest {
             highlighted: None,
             title: None,
             events_shown: EventDisplay::All,
+            show_fractions: true,
         }
     }
 }
 
-/// `<dir>/<prefix>_<yyyymmdd_HHMMSS>_figure_<n>.pdf` ("akta" for an empty prefix).
+/// `<dir>/<yyyymmdd_HHMMSS>_<prefix>_figure_<n>.pdf` ("akta" for an empty
+/// prefix): date first, like the logs.
 pub fn figure_path(dir: &Path, prefix: &str, n: u32) -> PathBuf {
     let prefix = if prefix.is_empty() { "akta" } else { prefix };
     let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    dir.join(format!("{prefix}_{stamp}_figure_{n}.pdf"))
+    dir.join(format!("{stamp}_{prefix}_figure_{n}.pdf"))
 }
 
 /// Render and write the PDF.
@@ -337,6 +340,24 @@ fn trace(svg: &mut Svg, a: &Area, pts: &[Pt], steps: bool, color: Rgb, alpha: f3
         r#"<path d="{d}" fill="none" stroke="{}" stroke-opacity="{alpha}" stroke-width="{width}" stroke-linejoin="round" stroke-linecap="round"/>"#,
         rgb(color)
     );
+}
+
+/// The number of each fraction whose middle is in view, centred, on baseline `y`.
+fn fraction_numbers(svg: &mut Svg, a: &Area, spans: &[pd::FractionSpan], y: f64) {
+    for s in spans {
+        let m = s.mid();
+        if m >= a.xlim.0 && m <= a.xlim.1 {
+            svg.text(
+                a.sx(m),
+                y,
+                &s.number.to_string(),
+                FS_FRAC,
+                Weight::SemiBold,
+                pd::FRAC_LABEL_COLOR,
+                "middle",
+            );
+        }
+    }
 }
 
 fn fraction_spans(svg: &mut Svg, a: &Area, spans: &[pd::FractionSpan]) {
@@ -619,7 +640,12 @@ pub fn render_svg(req: &ExportRequest) -> String {
     }
 
     // ── Stacked panels ────────────────────────────────────────────────────────
-    let spans = pd::fraction_spans(&req.fractions, &req.trend, xs);
+    // no spans: no shading and no numbers
+    let spans = if req.show_fractions {
+        pd::fraction_spans(&req.fractions, &req.trend, xs)
+    } else {
+        Vec::new()
+    };
     let mut y = top;
     for (i, p) in panels.iter().enumerate() {
         let a = Area {
@@ -650,20 +676,7 @@ pub fn render_svg(req: &ExportRequest) -> String {
         );
         if p.channel == Channel::Pctb {
             // fraction numbers near the 0 % baseline
-            for s in &spans {
-                let m = s.mid();
-                if m >= xlim.0 && m <= xlim.1 {
-                    svg.text(
-                        a.sx(m),
-                        a.sy(1.0) - 2.0,
-                        &s.number.to_string(),
-                        FS_FRAC,
-                        Weight::SemiBold,
-                        pd::FRAC_LABEL_COLOR,
-                        "middle",
-                    );
-                }
-            }
+            fraction_numbers(&mut svg, &a, &spans, a.sy(1.0) - 2.0);
         }
         svg.end_clip();
         axes(
@@ -717,6 +730,8 @@ pub fn render_svg(req: &ExportRequest) -> String {
             width,
         );
     }
+    // fraction numbers along the bottom edge
+    fraction_numbers(&mut svg, &a, &spans, a.top + a.h - 4.0);
     svg.end_clip();
     axes(&mut svg, &a, &ov_ticks, &ov_labels, ov_color, &xticks, true);
     svg.vtext(

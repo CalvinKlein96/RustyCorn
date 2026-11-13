@@ -132,11 +132,12 @@ pub fn event_row(wall: &str, ev: &AktaEvent) -> String {
     )
 }
 
-/// `<dir>/<prefix>_<yyyymmdd_HHMMSS>.csv` ("akta" when there is no prefix).
+/// `<dir>/<yyyymmdd_HHMMSS>_<prefix>.csv` ("akta" when there is no prefix):
+/// date first, so the logs sort by time whatever their prefix.
 pub fn new_log_name(dir: &Path, prefix: &str) -> PathBuf {
     let prefix = if prefix.is_empty() { "akta" } else { prefix };
     dir.join(format!(
-        "{prefix}_{}.csv",
+        "{}_{prefix}.csv",
         Local::now().format("%Y%m%d_%H%M%S")
     ))
 }
@@ -189,6 +190,10 @@ fn remove_if_exists(path: &Path) {
 static REBUILD_FRACTION_SIZE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)Fraction size\s+([0-9]+(?:\.[0-9]+)?)\s+ml").expect("valid regex")
 });
+static REBUILD_FRACTION_OFF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\bFraction\s+Off\b").expect("valid regex"));
+static RUN_END_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^Run state:\s*End\b").expect("valid regex"));
 static REBUILD_FEED_TUBE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)Feed Tube Nr\s+(\d+)").expect("valid regex"));
 
@@ -342,8 +347,13 @@ impl AppState {
     }
 
     /// Replay the events in order to rebuild the fractions list from scratch
-    /// Scans EVT_LOG and EVT_TUBEFEED texts for
-    /// "Fraction size" and "Feed Tube Nr".
+    /// Scans EVT_LOG and EVT_TUBEFEED texts for "Fraction size", "Fraction Off"
+    /// and "Feed Tube Nr", applying tube feeds as the live link does
+    /// ([`AppState::feed_tube`]). A tube feed without a number (logs written
+    /// before the tube number was recorded: "Tubefeed event (10 bytes)") moves
+    /// on to the next tube ([`AppState::feed_next_tube`]), unless it is the feed
+    /// that stops fractionation ([`is_stop_feed`]). The run's end closes an
+    /// open fraction.
     pub fn rebuild_fractions(&mut self) {
         self.inst.fraction_number = 1;
         self.inst.fraction_vol_ml = 0.0;
@@ -354,15 +364,32 @@ impl AppState {
             let ev = &self.events[i];
             self.inst.cum_time_ms = ev.cum_time_ms;
             self.inst.cum_vol_ml = ev.cum_vol_ml;
+            if is_run_end(ev) {
+                self.end_fractionation();
+                continue;
+            }
             if !matches!(ev.kind, EventKind::Log | EventKind::Tubefeed) {
                 continue;
             }
             let size = REBUILD_FRACTION_SIZE_RE
                 .captures(&ev.text)
-                .and_then(|c| c[1].parse::<f64>().ok());
+                .and_then(|c| c[1].parse::<f64>().ok())
+                .or_else(|| REBUILD_FRACTION_OFF_RE.is_match(&ev.text).then_some(0.0));
             let tube = REBUILD_FEED_TUBE_RE
                 .captures(&ev.text)
                 .and_then(|c| c[1].parse::<i64>().ok());
+            if ev.kind == EventKind::Tubefeed {
+                // the live link's tube feeds: the instrument's number (0 = the end
+                // of fractionation), or none in logs written before it was recorded
+                match tube {
+                    Some(n) => self.feed_tube(n),
+                    None if is_stop_feed(&self.events, i) => {}
+                    None => {
+                        self.feed_next_tube();
+                    }
+                }
+                continue;
+            }
             if let Some(size) = size {
                 self.inst.fraction_vol_ml = size;
             }
@@ -375,6 +402,53 @@ impl AppState {
         }
         self.touch();
     }
+}
+
+/// How long after the feed that stops fractionation the "Fraction Off" comes
+/// (an ÄKTAprime: 0.2–0.5 s).
+const STOP_FEED_MS: f64 = 2000.0;
+
+/// Whether the unnumbered tube feed `events[i]` is the one an ÄKTAprime sends
+/// when fractionation stops (tube 0): the next fraction event is "Fraction
+/// Off" (or size 0) within [`STOP_FEED_MS`], with no other tube feed between.
+/// Logs written before the tube number was recorded need this to count the
+/// tubes as the instrument does: the tube after a restart is the one after
+/// the last tube fed, not after the stop.
+pub fn is_stop_feed(events: &[AktaEvent], i: usize) -> bool {
+    let Some(feed) = events.get(i) else {
+        return false;
+    };
+    for e in &events[i + 1..] {
+        if e.cum_time_ms - feed.cum_time_ms > STOP_FEED_MS {
+            return false;
+        }
+        match e.kind {
+            EventKind::Tubefeed => return false,
+            EventKind::Log => {
+                if let Some(size) = crate::logtext::fraction_size_from_log(&e.text) {
+                    return size == 0.0;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Whether `e` is the run state event of a run's end ("Run state: End").
+pub fn is_run_end(e: &AktaEvent) -> bool {
+    e.kind == EventKind::RunState && RUN_END_RE.is_match(&e.text)
+}
+
+/// [`load_csv_log`] with the fractions cut by the fraction collector's delay
+/// volume at the run's end (see [`AppState::end_fractionation`]).
+pub fn load_csv_log_with_delay(path: &Path, fraction_delay_ml: f64) -> io::Result<AppState> {
+    let mut app = load_csv_log(path)?;
+    if fraction_delay_ml > 0.0 {
+        app.fraction_delay_ml = fraction_delay_ml;
+        app.rebuild_fractions();
+    }
+    Ok(app)
 }
 
 /// Parse an Akta CSV log into a fresh AppState: trend
@@ -531,15 +605,21 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let name = new_log_name(dir.path(), "");
         let file = name.file_name().and_then(|n| n.to_str()).expect("name");
+        // yyyymmdd_HHMMSS_akta.csv
+        assert!(file.ends_with("_akta.csv") && file.len() == 24, "{file}");
+        assert_eq!(&file[8..9], "_");
         assert!(
-            file.starts_with("akta_") && file.ends_with(".csv") && file.len() == 24,
+            file[..15]
+                .chars()
+                .filter(|c| *c != '_')
+                .all(|c| c.is_ascii_digit()),
             "{file}"
         );
         assert_eq!(name.parent(), Some(dir.path()));
         assert!(
             new_log_name(Path::new(""), "x")
                 .to_string_lossy()
-                .starts_with("x_")
+                .ends_with("_x.csv")
         );
         // never an existing file
         let a = unique_log_name(dir.path(), "p");
@@ -800,6 +880,118 @@ mod tests {
         assert_eq!(
             load_csv_log(&app.log_filename).expect("load").trend.len(),
             2
+        );
+    }
+
+    /// The fraction events of a real ÄKTAprime run (2026-10-23), logged before
+    /// tube numbers were recorded: 10 ml tubes from 5 to 105 ml, "Fraction Off"
+    /// (the feed just before it is the stop's tube 0), one 10 ml tube from
+    /// 105.1 ml, then 2 ml tubes until the run ends.
+    #[test]
+    fn unnumbered_tube_feeds_of_an_instrument_log_are_counted() {
+        let feed = "\"Tubefeed event (10 bytes)\"";
+        let mut rows = vec![
+            (4.996, "EVT_LOG", "\"Break point 2\""),
+            (4.996, "EVT_TUBEFEED", feed),
+            (5.006, "EVT_LOG", "\"Fraction size 10.0 ml\""),
+        ];
+        for v in [
+            14.992, 24.994, 34.995, 44.991, 54.987, 64.983, 74.99, 84.998, 95.006,
+        ] {
+            rows.push((v, "EVT_TUBEFEED", feed));
+        }
+        rows.extend([
+            (105.0, "EVT_TUBEFEED", feed),
+            (105.007, "EVT_LOG", "\"Fraction Off\""),
+            (105.1, "EVT_TUBEFEED", feed),
+            (105.107, "EVT_LOG", "\"Fraction size 10.0 ml\""),
+            (115.105, "EVT_TUBEFEED", feed),
+            (115.108, "EVT_LOG", "\"Fraction size 2.0 ml\""),
+        ]);
+        for v in [
+            117.103, 119.104, 121.106, 123.108, 125.109, 127.111, 129.112,
+        ] {
+            rows.push((v, "EVT_TUBEFEED", feed));
+        }
+        let mut text = String::new();
+        for (v, kind, msg) in rows {
+            let ms = v * 60_000.0; // 1 ml/min
+            text.push_str(&format!("w,{ms},{v},{kind},,,,,,,{msg}\n"));
+        }
+        text.push_str("w,7798690.0,130.02,TREND,0,0,0,100,0,0,\n");
+        let (trend, events) = parse_csv_log(&text);
+        let mut app = AppState::new();
+        app.trend = trend;
+        app.events = events;
+        app.rebuild_fractions();
+
+        let got: Vec<(i64, f64, Option<f64>)> = app
+            .fractions
+            .iter()
+            .map(|f| (f.fraction_number, f.start_vol_ml, f.end_vol_ml))
+            .collect();
+        let mut want: Vec<(i64, f64, Option<f64>)> = vec![(1, 5.006, Some(14.992))];
+        // tube 10 runs until "Fraction Off": the feed at 105.0 ml is the stop
+        let tens = [
+            14.992, 24.994, 34.995, 44.991, 54.987, 64.983, 74.99, 84.998, 95.006, 105.007,
+        ];
+        for (i, w) in tens.windows(2).enumerate() {
+            want.push((i as i64 + 2, w[0], Some(w[1])));
+        }
+        // the restart goes on with the next tube, 11
+        want.push((11, 105.107, Some(115.105)));
+        let twos = [
+            115.105, 117.103, 119.104, 121.106, 123.108, 125.109, 127.111, 129.112,
+        ];
+        for (i, w) in twos.windows(2).enumerate() {
+            want.push((i as i64 + 12, w[0], Some(w[1])));
+        }
+        want.push((19, 129.112, None)); // still collecting when the log ends
+        assert_eq!(got, want);
+    }
+
+    /// The fraction events of a debug run (2026-11-13) as the version before
+    /// tube numbers were recorded logged them: 1 ml tubes from 0 ml, a stop at
+    /// 1 ml (just after tube 2 was fed), 1 ml tubes again from 1.5 ml. The
+    /// instrument fed tubes 1, 2, 0 (the stop), 3, 4, 5 (raw capture).
+    #[test]
+    fn unnumbered_feeds_around_a_stop_count_as_the_instrument_does() {
+        let text = "\
+            w,0.0,0.000000,EVT_RUN_STATE,,,,,,,\"Run state: Run  inject=IV_INJECT\"
+            w,0.0,0.000000,EVT_TUBEFEED,,,,,,,\"Tubefeed event (10 bytes)\"
+            w,190.0,0.001000,EVT_LOG,,,,,,,\"Fraction size 1.0 ml\"
+            w,119700.0,0.998000,EVT_TUBEFEED,,,,,,,\"Tubefeed event (10 bytes)\"
+            w,119840.0,1.000000,EVT_TUBEFEED,,,,,,,\"Tubefeed event (10 bytes)\"
+            w,120210.0,1.001000,EVT_LOG,,,,,,,\"Break point 2\"
+            w,120340.0,1.003000,EVT_LOG,,,,,,,\"Fraction Off\"
+            w,179820.0,1.499000,EVT_TUBEFEED,,,,,,,\"Tubefeed event (10 bytes)\"
+            w,180220.0,1.503000,EVT_LOG,,,,,,,\"Break point 3\"
+            w,180330.0,1.503000,EVT_LOG,,,,,,,\"Fraction size 1.0 ml\"
+            w,299700.0,2.498000,EVT_TUBEFEED,,,,,,,\"Tubefeed event (10 bytes)\"
+            w,419690.0,3.498000,EVT_TUBEFEED,,,,,,,\"Tubefeed event (10 bytes)\"
+            w,479700.0,3.998000,EVT_RUN_STATE,,,,,,,\"Run state: End  inject=IV_INJECT\"
+            w,479700.0,3.998000,TREND,0,0,0,0,0,0,
+            ";
+        let lines: String = text.lines().map(|l| format!("{}\n", l.trim())).collect();
+        let (trend, events) = parse_csv_log(&lines);
+        let mut app = AppState::new();
+        app.trend = trend;
+        app.events = events;
+        app.rebuild_fractions();
+        let got: Vec<(i64, f64, Option<f64>)> = app
+            .fractions
+            .iter()
+            .map(|f| (f.fraction_number, f.start_vol_ml, f.end_vol_ml))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (1, 0.001, Some(0.998)),
+                (2, 0.998, Some(1.003)),
+                (3, 1.503, Some(2.498)),
+                (4, 2.498, Some(3.498)),
+                (5, 3.498, Some(3.998)), // closed by the run's end
+            ]
         );
     }
 

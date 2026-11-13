@@ -89,6 +89,7 @@ impl Acquisition {
         {
             let mut app = self.app.lock();
             app.volume_unit_ul = s.volume_unit_ul;
+            app.fraction_delay_ml = s.fraction_delay_ml;
             app.log_prefix = s.log_prefix.clone();
             app.method_dir = method_dir;
             app.log_dir = log_dir;
@@ -250,7 +251,7 @@ mod tests {
         }
         let files = csv_files(&data);
         assert_eq!(files.len(), 2, "{files:?}"); // log and raw capture
-        assert!(files[0].starts_with("acq_") && files[1].ends_with("_raw.txt"));
+        assert!(files[0].ends_with("_acq.csv") && files[1].ends_with("_acq_raw.txt"));
         wait_until("port reported missing", || {
             app.lock().status
                 == "Serial port /nonexistent/rustycorn-test-port not available — retrying"

@@ -124,7 +124,7 @@ pub struct Settings {
     pub serial_port: String,
     /// µL per volume count
     pub volume_unit_ul: f64,
-    /// CSV files are named <prefix>_<date>_<time>.csv
+    /// CSV files are named <date>_<time>_<prefix>.csv
     pub log_prefix: String,
     /// folder for log files and plots; "" = [`default_data_dir`]
     pub data_dir: String,
@@ -142,6 +142,10 @@ pub struct Settings {
     pub start_panels: Vec<String>,
     /// also save every instrument message (_raw.txt) and method dumps (.met)
     pub save_raw: bool,
+    /// delay volume (mL) between the UV cell and the fraction collector, as set
+    /// on the instrument: what passed the UV cell in it before a run ends
+    /// reaches no tube
+    pub fraction_delay_ml: f64,
     /// graphics interface of the window; applies at the next start
     pub gpu_backend: GpuBackend,
 }
@@ -160,6 +164,7 @@ impl Default for Settings {
             last_user: String::new(),
             start_panels: ALL_PANELS.iter().map(|s| s.to_string()).collect(),
             save_raw: false,
+            fraction_delay_ml: crate::DEFAULT_FRACTION_DELAY_ML,
             gpu_backend: GpuBackend::platform_default(),
         }
     }
@@ -472,6 +477,7 @@ fn settings_from_table(t: &toml::Table, source: &str, invalid: &mut Vec<String>)
     let string = |v: &toml::Value| v.as_str().map(str::to_string);
     // Integers are accepted as numbers; a rate or unit must be positive.
     let positive = |v: &toml::Value| toml_number(v).filter(|x| x.is_finite() && *x > 0.0);
+    let not_negative = |v: &toml::Value| toml_number(v).filter(|x| x.is_finite() && *x >= 0.0);
     let panels = |v: &toml::Value| {
         v.as_array()?
             .iter()
@@ -499,6 +505,14 @@ fn settings_from_table(t: &toml::Table, source: &str, invalid: &mut Vec<String>)
         last_user: table_field(t, "last_user", &string, d.last_user, source, invalid),
         start_panels: table_field(t, "start_panels", &panels, d.start_panels, source, invalid),
         save_raw: table_field(t, "save_raw", &boolean, d.save_raw, source, invalid),
+        fraction_delay_ml: table_field(
+            t,
+            "fraction_delay_ml",
+            &not_negative,
+            d.fraction_delay_ml,
+            source,
+            invalid,
+        ),
         gpu_backend: table_field(t, "gpu_backend", &gpu, d.gpu_backend, source, invalid),
     }
 }
@@ -656,6 +670,22 @@ mod tests {
     }
 
     #[test]
+    fn fraction_delay_volume_in_the_file() {
+        let dir = temp();
+        let path = dir.path().join("settings.toml");
+        assert_eq!(
+            load_settings_checked(&path).0.fraction_delay_ml,
+            crate::DEFAULT_FRACTION_DELAY_ML
+        );
+        std::fs::write(&path, "fraction_delay_ml = 0\n").unwrap();
+        assert_eq!(load_settings_checked(&path).0.fraction_delay_ml, 0.0);
+        std::fs::write(&path, "fraction_delay_ml = -0.5\n").unwrap();
+        let (s, problem) = load_settings_checked(&path);
+        assert_eq!(s.fraction_delay_ml, crate::DEFAULT_FRACTION_DELAY_ML);
+        assert!(problem.unwrap().contains("fraction_delay_ml"));
+    }
+
+    #[test]
     fn gpu_backend_in_the_file() {
         let dir = temp();
         let path = dir.path().join("settings.toml");
@@ -725,6 +755,7 @@ mod tests {
             start_panels: vec!["pH".into()],
             save_raw: true,
             gpu_backend: GpuBackend::Vulkan,
+            fraction_delay_ml: 0.25,
             ..Settings::default()
         };
         s.last_user = "Alex \"K\", lab 2".into();

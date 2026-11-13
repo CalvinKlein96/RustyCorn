@@ -382,8 +382,8 @@ impl RunView {
         clip.rect_filled(r, 0.0, t.plot_bg);
         let is = |c: Channel| pane == Pane::Chan(c);
 
-        // fraction collection spans on UV, %B and the overlay
-        if is(Channel::Uv) || is(Channel::Pctb) || pane == Pane::Overlay {
+        // fraction collection spans on UV, %B and the overlay (unless switched off)
+        if self.show_fractions && (is(Channel::Uv) || is(Channel::Pctb) || pane == Pane::Overlay) {
             for s in &self.derived.spans {
                 if s.x1 < xf.x.0 || s.x0 > xf.x.1 {
                     continue;
@@ -520,31 +520,13 @@ impl RunView {
                 if pane == Pane::Overlay { None } else { avoid },
             );
         }
-        // fraction numbers in the %B panel near the baseline
-        if is(Channel::Pctb) {
-            let col = if t.dark {
-                t.uv
-            } else {
-                rc_theme::rgb3(rc_plotdata::FRAC_LABEL_COLOR)
-            };
-            // numbers that would overlap the previous one are left out (narrow fractions)
-            let mut right = f32::NEG_INFINITY;
-            for s in &self.derived.spans {
-                let m = s.mid();
-                if m < xf.x.0 || m > xf.x.1 {
-                    continue;
-                }
-                let g = ui.painter().layout_no_wrap(
-                    s.number.to_string(),
-                    rc_theme::semibold(12.0),
-                    col,
-                );
-                let x = xf.sx(m);
-                if x - g.size().x / 2.0 < right + 3.0 {
-                    continue;
-                }
-                right = x + g.size().x / 2.0;
-                clip.galley(pos2(x - g.size().x / 2.0, xf.sy(1.0) - g.size().y), g, col);
+        // fraction numbers: in the %B panel near the baseline, in the overlay
+        // along the bottom edge
+        if self.show_fractions {
+            if is(Channel::Pctb) {
+                self.draw_fraction_numbers(ui, &clip, t, xf, xf.sy(1.0));
+            } else if pane == Pane::Overlay {
+                self.draw_fraction_numbers(ui, &clip, t, xf, r.bottom() - 2.0);
             }
         }
 
@@ -642,6 +624,39 @@ impl RunView {
         }
     }
 
+    /// The fraction numbers centred in their spans, bottoms at screen y `bottom`;
+    /// a number that would overlap the previous one is left out (narrow fractions).
+    fn draw_fraction_numbers(
+        &self,
+        ui: &egui::Ui,
+        painter: &Painter,
+        t: &Palette,
+        xf: &Xf,
+        bottom: f32,
+    ) {
+        let col = if t.dark {
+            t.uv
+        } else {
+            rc_theme::rgb3(rc_plotdata::FRAC_LABEL_COLOR)
+        };
+        let mut right = f32::NEG_INFINITY;
+        for s in &self.derived.spans {
+            let m = s.mid();
+            if m < xf.x.0 || m > xf.x.1 {
+                continue;
+            }
+            let g =
+                ui.painter()
+                    .layout_no_wrap(s.number.to_string(), rc_theme::semibold(12.0), col);
+            let x = xf.sx(m);
+            if x - g.size().x / 2.0 < right + 3.0 {
+                continue;
+            }
+            right = x + g.size().x / 2.0;
+            painter.galley(pos2(x - g.size().x / 2.0, bottom - g.size().y), g, col);
+        }
+    }
+
     fn draw_event_labels(
         &mut self,
         painter: &Painter,
@@ -657,8 +672,7 @@ impl RunView {
         let px = (xf.r.width() as f64, xf.r.height() as f64);
         let av = avoid.unwrap_or((0.0, 0.0, 0.0, 0.0));
         let key = [
-            self.snap.version,
-            self.xs().to_bits(),
+            d.label_gen,
             lims.0.to_bits(),
             lims.1.to_bits(),
             lims.2.to_bits(),
@@ -666,7 +680,6 @@ impl RunView {
             (px.0 as f32).to_bits() as u64 | (((px.1 as f32).to_bits() as u64) << 32),
             av.0.to_bits(),
             av.3.to_bits(),
-            self.events_shown as u64,
         ];
         if self.labels.key != Some(key) {
             self.labels.pos =
@@ -674,21 +687,15 @@ impl RunView {
             self.labels.key = Some(key);
         }
         let font = rc_theme::medium(rc_plotdata::EVENT_LABEL_FONTSIZE as f32);
-        for (i, a) in self.labels.pos.iter().enumerate() {
-            if d.label_x[i] < xf.x.0 || d.label_x[i] > xf.x.1 {
+        for ((a, &x), text) in self.labels.pos.iter().zip(&d.label_x).zip(&d.label_text) {
+            if x < xf.x.0 || x > xf.x.1 {
                 continue;
             }
             let pos = xf.pos(*a);
             if pos.y > xf.r.bottom() {
                 continue;
             }
-            painter.text(
-                pos,
-                Align2::LEFT_TOP,
-                &d.label_text[i],
-                font.clone(),
-                t.text_dim,
-            );
+            painter.text(pos, Align2::LEFT_TOP, text, font.clone(), t.text_dim);
         }
     }
 

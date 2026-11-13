@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use rc_core::logtext::{flow_from_log, set_buffer_valve_from_log, set_inject_from_log};
+use rc_core::logtext::{
+    flow_from_log, fraction_size_from_log, set_buffer_valve_from_log, set_inject_from_log,
+};
 use rc_core::{AktaEvent, EventKind, Fraction, InjectValue, InstrumentState, TrendPoint};
 use regex::Regex;
 
@@ -494,6 +496,7 @@ fn re(pat: &str) -> Regex {
 static RE_INJ_VALVE: LazyLock<Regex> = LazyLock::new(|| re(r"Valve\s*→\s*([A-Za-z_]+)"));
 static RE_RUN_STATE_TOP: LazyLock<Regex> = LazyLock::new(|| re(r"Run state:\s*([^\s]+)"));
 static RE_FRAC_SIZE_TOP: LazyLock<Regex> = LazyLock::new(|| re(r"Fraction size (\d+(?:\.\d+)?)"));
+static RE_FRAC_OFF: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^\s*Fraction\s+Off\s*$"));
 static RE_LOG_SHORT: LazyLock<[(Regex, &'static str); 5]> = LazyLock::new(|| {
     [
         (
@@ -525,6 +528,9 @@ pub fn event_label_top(e: &AktaEvent) -> String {
         EventKind::Step => "STEP".to_string(),
         EventKind::Log => {
             // Special handling for fraction size zero-transitions
+            if RE_FRAC_OFF.is_match(&e.text) {
+                return "FRAC STOP".to_string();
+            }
             if e.text.contains("Fraction size")
                 && let Some(c) = RE_FRAC_SIZE_TOP.captures(&e.text)
             {
@@ -572,7 +578,10 @@ pub fn fraction_label_bottom(e: &AktaEvent) -> String {
 /// Events drawn as labelled lines on the UV panel: everything but Info and tube
 /// feeds; "Fraction size" log events only on 0↔>0 transitions.
 pub fn labelled_events(events: &[AktaEvent]) -> Vec<&AktaEvent> {
-    let is_frac_size = |e: &AktaEvent| e.kind == EventKind::Log && e.text.contains("Fraction size");
+    // "Fraction Off" is fraction size 0
+    let is_off = |e: &AktaEvent| RE_FRAC_OFF.is_match(&e.text);
+    let is_frac_size =
+        |e: &AktaEvent| e.kind == EventKind::Log && (e.text.contains("Fraction size") || is_off(e));
     // Fraction volume of every parsable "Fraction size" message, to detect zero-transitions.
     // These are paired with the "Fraction size" events by position, so an
     // unparsable message shifts the pairing and the last ones read as 0
@@ -581,6 +590,9 @@ pub fn labelled_events(events: &[AktaEvent]) -> Vec<&AktaEvent> {
         .iter()
         .filter(|e| is_frac_size(e))
         .filter_map(|e| {
+            if is_off(e) {
+                return Some(0.0);
+            }
             RE_FRAC_SIZE_TOP
                 .captures(&e.text)
                 .and_then(|c| c[1].parse().ok())
@@ -702,13 +714,13 @@ pub fn fraction_spans(fracs: &[Fraction], trend: &[TrendPoint], xs: XScale) -> V
         .collect()
 }
 
+// Older logs add "  inject=IV_…" from the run state message: not the valve
+// (always IV_INJECT from an ÄKTAprime), so it is ignored.
+static RE_RUN_STATE: LazyLock<Regex> = LazyLock::new(|| re(r"Run state:\s*(\S+)"));
 // In memory the event text has ", inject" with a comma, but the
 // CSV writer turns them into ";", so a reopened log needs "[,;]" to match.
-static RE_RUN_STATE: LazyLock<Regex> = LazyLock::new(|| re(r"Run state:\s*(\S+)\s+inject=(\w+)"));
 static RE_METHOD_START: LazyLock<Regex> =
     LazyLock::new(|| re(r"^Method start:.*buffer port (\d+)[,;] inject (\w+)"));
-static RE_FRAC_SIZE: LazyLock<Regex> =
-    LazyLock::new(|| re(r"(?i)^Fraction size\s+([0-9.]+)\s+ml$"));
 static RE_FEED_TUBE: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^Feed Tube Nr\s+(\d+)$"));
 
 /// Instrument state at a past moment, rebuilt by replaying the events
@@ -716,17 +728,49 @@ static RE_FEED_TUBE: LazyLock<Regex> = LazyLock::new(|| re(r"(?i)^Feed Tube Nr\s
 /// CSV, so this works for reopened logs too.
 pub fn state_at(events: &[AktaEvent], p: &TrendPoint) -> InstrumentState {
     let mut s = InstrumentState::default();
-    for e in events.iter().filter(|e| e.cum_time_ms <= p.cum_time_ms) {
+    // tube feeds without a number (older logs) count on once something was
+    // collected
+    let mut collected = false;
+    for (i, e) in events.iter().enumerate() {
+        if e.cum_time_ms > p.cum_time_ms {
+            continue;
+        }
         match e.kind {
             EventKind::RunState => {
                 if let Some(c) = RE_RUN_STATE.captures(&e.text) {
                     s.run_state = c[1].to_string();
-                    s.inject_value = InjectValue::from_name(&c[2]).unwrap_or(s.inject_value);
+                }
+                if rc_core::csvlog::is_run_end(e) {
+                    s.fraction_vol_ml = 0.0;
+                }
+            }
+            // the demo's valve changes ("Valve → LOAD (demo)")
+            EventKind::Inject => {
+                if let Some(v) = RE_INJ_VALVE
+                    .captures(&e.text)
+                    .and_then(|c| InjectValue::from_name(&format!("IV_{}", c[1].to_uppercase())))
+                {
+                    s.inject_value = v;
                 }
             }
             EventKind::Log => apply_log_text(&e.text, &mut s),
+            // as AppState::feed_tube / feed_next_tube: tube 0 ends fractionation
+            EventKind::Tubefeed => match RE_FEED_TUBE.captures(e.text.trim()) {
+                Some(c) => {
+                    if let Ok(n) = c[1].parse::<i64>()
+                        && n >= 1
+                    {
+                        s.fraction_number = n;
+                    }
+                }
+                None if collected && !rc_core::csvlog::is_stop_feed(events, i) => {
+                    s.fraction_number += 1
+                }
+                None => {}
+            },
             _ => {}
         }
+        collected |= s.fraction_vol_ml > 0.0;
     }
     s.cum_time_ms = p.cum_time_ms;
     s.run_time_ms = p.cum_time_ms;
@@ -748,10 +792,8 @@ fn apply_log_text(text: &str, s: &mut InstrumentState) {
             "waste" => InjectValue::Waste,
             _ => s.inject_value,
         };
-    } else if let Some(c) = RE_FRAC_SIZE.captures(t) {
-        if let Ok(v) = c[1].parse() {
-            s.fraction_vol_ml = v;
-        }
+    } else if let Some(v) = fraction_size_from_log(t) {
+        s.fraction_vol_ml = v;
     } else if let Some(c) = RE_FEED_TUBE.captures(t) {
         if let Ok(n) = c[1].parse::<i64>() {
             s.fraction_number = n.max(1);

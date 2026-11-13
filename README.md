@@ -58,8 +58,8 @@ RustyCorn's CSV logs and `PrimeMeth_NNN.txt` method files are interchangeable wi
   without an instrument (`rustycorn --methods`). Values the instrument would
   reject are marked in red, and such a method is not saved.
 - **Run information:** column, buffers and notes kept with each PC method and
-  recorded automatically when the instrument runs it; sample, user and notes
-  asked for at every run start; editable later.
+  recorded automatically when the instrument runs it; every field asked for
+  at run start and editable while the run goes on, and later.
 - **Analyze Run:** open any saved log in its own tab, inspect it, add run
   information and export the plot as a vector PDF.
 - **Light and dark theme.** Settings are saved at once; a settings file that
@@ -165,7 +165,7 @@ choose the serial port, the volume unit of your instrument and a data folder
 
 Then the window waits for the instrument. Run the ÄKTAprime from its own front
 panel as usual: RustyCorn watches and records, it does not control the
-separation. Every run is written to its own `<prefix>_<date>_<time>.csv`;
+separation. Every run is written to its own `<date>_<time>_<prefix>.csv`;
 logs without any data are deleted. If the cable is pulled or the instrument
 stops answering, RustyCorn keeps retrying and reconnects by itself.
 
@@ -190,6 +190,7 @@ Click **Settings** in the top bar. Every change is saved at once.
 | Demo mode | Simulated data, no instrument needed. |
 | Serial port | Pick from the list or type, e.g. `/dev/ttyUSB0` or `COM3`, and press Enter. |
 | Volume unit | 1 µL per count (ÄKTAprime) or 10 µL per count (ÄKTAprime plus); see [below](#volume-unit-1-or-10-µl). |
+| Fraction delay volume | The delay volume between the UV cell and the fraction collector, as set on the instrument (default 580 µL). The ÄKTAprime moves the rack that much after each fraction boundary, so each tube holds what passed the UV cell between two boundaries, as the plot shows. What passed it in the last delay volume before a run ends is still in the tubing when the pump stops: the last fractions are cut there, and a tube that would only start after that point stays empty. |
 | Log file prefix | Prefix for the next log file. |
 | Data folder | Where the CSV logs, raw captures, method dumps and the PDFs exported from the Live tab go (from the next log on). |
 | Methods folder | Where the methods the instrument saves to and loads from the PC are kept (`PrimeMeth_NNN.txt`, `names.txt`, run setups). Unless one is chosen, `methods` in the data folder. Applies at once. |
@@ -232,7 +233,7 @@ without touching the real settings.
 ## Data and methods folders
 
 - **Data folder** (Settings → Folders → Data folder → Choose…): one CSV log
-  per run, `<prefix>_<date>_<time>.csv`, the raw captures and method dumps of
+  per run, `<date>_<time>_<prefix>.csv`, the raw captures and method dumps of
   **Save raw instrument data**, and the PDFs saved with **Save PDF** in the
   Live tab (an opened log's PDFs go next to that log). Until one is
   chosen, the folder of `RustyCorn.exe` is used on Windows, and elsewhere the
@@ -271,15 +272,21 @@ log, and the method's notes as `Method notes: …`. The buffer names then appear
 in the flow-path card, and the column volume enables **Plot vs column
 volumes**. With no match, no setup is recorded.
 
-**Per-run fields.** When a run starts, a small window asks for the
-**sample**, **user** and **notes** of that run. It is not modal (recording
-goes on behind it), and the user is prefilled with the last one. **Skip**
-leaves the fields empty. The **Run info** card on the Live page shows what
-was recorded, and its **Edit** button reopens the window.
+**At run start and during the run.** When a run starts, a window asks for
+the run information: the **sample**, **user** and **notes** of that run, and
+the column, column volume and buffers, filled in from the method's run setup
+when there is one. A method started from the instrument's own memory has no
+run setup: give the column and column volume here. The window is not modal
+(recording goes on behind it), and the user is prefilled with the last one.
+**Skip** records nothing. The **Run info** card on the Live page shows what
+was recorded, and its **Edit** button reopens the window while the run goes
+on: changed fields are recorded in the log at once, and a column volume
+given then is used by **Plot vs column volumes** straight away. An emptied
+field keeps its old value.
 
-![The window that asks for sample, user and notes when a run starts](assets/screenshots/new-run.png)
+![The window that asks for the run information when a run starts](assets/screenshots/new-run.png)
 
-*A new run has started: sample, user and notes, while recording goes on.*
+*A new run has started: its run information, while recording goes on.*
 
 **Editing old runs.** Open a finished log (**Analyze Run…**) and click **Edit
 run info**: any field can be added or corrected. The values are appended to
@@ -374,11 +381,12 @@ run information) and where the outlet goes.
 buffer port 1 "Binding buffer", outlet to fraction 5.*
 
 **Save PDF** in the toolbar saves the plot as a vector PDF
-(`<prefix>_<date>_<time>_figure_<n>.pdf`): from the Live tab in the data
+(`<date>_<time>_<prefix>_figure_<n>.pdf`): from the Live tab in the data
 folder, from an opened log next to that log. The PDF has the panels shown, with
-the on-screen x- and y-limits and the **Events** setting, and below them an
-overlay of every channel with a legend. The full data are drawn, not the
-downsampled screen version, always in light colours for printing.
+the on-screen x- and y-limits and the **Events** and **Fractions** settings,
+and below them an overlay of every channel with a legend. The full data are
+drawn, not the downsampled screen version, always in light colours for
+printing.
 
 <img src="assets/screenshots/pdf-export.png" alt="A PDF export: stacked panels and an overlay of every channel" width="480">
 
@@ -419,8 +427,10 @@ The toolbar:
   then in its units. Click it again to clear.
 - **Events** chooses which event lines and labels are drawn, on screen and in
   the PDF: **All**, **No steps** (hides the method steps and break points,
-  which can crowd a long method) or **None**. Fractions are always shown, and
-  the run log always lists every event.
+  which can crowd a long method) or **None**. The run log always lists every
+  event.
+- **Fractions** switches the fraction shading and numbers on and off, on
+  screen and in the PDF.
 - **Save PDF** saves the plot (see [above](#analysing-a-run-and-exporting-a-pdf)).
 - **Show log** opens the run log below the plots: every event with its time
   and volume, a text filter, and a click on a line inspects that moment.

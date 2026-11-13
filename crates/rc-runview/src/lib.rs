@@ -115,6 +115,10 @@ struct Derived {
     /// events with a line: (time ms, volume mL, colour, dashed)
     line_tv: Vec<(f64, f64, egui::Color32, bool)>,
     xkey: Option<(u64, u64)>,
+    /// counts the rebuilds of `label_x`: the label layout is keyed by it, so it
+    /// never outlives the labels it was made for (the toolbar can change the
+    /// event display or x units after `derive`, within the same frame)
+    label_gen: u64,
     label_x: Vec<f64>,
     lines: Vec<EvLine>,
     spans: Vec<FractionSpan>,
@@ -136,7 +140,7 @@ struct Shown {
 /// Event label anchors laid out for one view (rc_plotdata::event_label_positions).
 #[derive(Default)]
 struct LabelLayout {
-    key: Option<[u64; 10]>,
+    key: Option<[u64; 8]>,
     pos: Vec<Pt>,
 }
 
@@ -174,6 +178,8 @@ pub struct RunView {
     highlighted: Option<Channel>,
     /// which event lines and labels the plots (and the PDF) show
     events_shown: EventDisplay,
+    /// fraction shading and numbers on the plots (and in the PDF)
+    show_fractions: bool,
     view: ViewState,
     sel: Selection,
     traces: traces::TraceCache,
@@ -224,6 +230,7 @@ impl RunView {
             show_log: false,
             highlighted: None,
             events_shown: EventDisplay::All,
+            show_fractions: true,
             view: ViewState::default(),
             // viewer mode starts at the end of the log
             sel: Selection {
@@ -312,6 +319,15 @@ impl RunView {
         self.events_shown
     }
 
+    /// Fraction shading and numbers on the plots and in the PDF.
+    pub fn set_show_fractions(&mut self, on: bool) {
+        self.show_fractions = on;
+    }
+
+    pub fn shows_fractions(&self) -> bool {
+        self.show_fractions
+    }
+
     /// Highlight an overlay trace (None = none).
     pub fn set_highlight(&mut self, ch: Option<Channel>) {
         self.highlighted = ch;
@@ -393,6 +409,7 @@ impl RunView {
         let key = (s.version, xs.to_bits());
         if d.xkey != Some(key) {
             d.xkey = Some(key);
+            d.label_gen = d.label_gen.wrapping_add(1);
             d.label_x = d
                 .label_tv
                 .iter()
@@ -562,6 +579,7 @@ impl RunView {
             highlighted: self.highlighted,
             title: (!self.snap.log_file.is_empty()).then(|| self.snap.log_file.clone()),
             events_shown: self.events_shown,
+            show_fractions: self.show_fractions,
         };
         self.export.counter += 1;
         let prefix = if self.snap.log_prefix.is_empty() {
@@ -765,7 +783,7 @@ impl RunView {
             }
         }
         // Events: all, without the method steps, or none (a cleaner plot);
-        // fraction shading and numbers stay, the run log lists everything.
+        // the run log lists everything. Fractions have their own switch.
         egui::ComboBox::from_id_salt((self.id, "events"))
             .selected_text(format!("Events: {}", self.events_shown.label()))
             .width(136.0)
@@ -776,6 +794,8 @@ impl RunView {
             })
             .response
             .on_hover_text("Event lines and labels on the plot and in the PDF; \"No steps\" hides the method steps and break points");
+        ui.checkbox(&mut self.show_fractions, "Fractions")
+            .on_hover_text("Fraction shading and numbers on the plot and in the PDF");
         let save = ui.add_enabled(!self.export.busy(), egui::Button::new("Save PDF"));
         if save
             .on_hover_text("Save the plot as shown to a PDF next to the log")
@@ -1221,6 +1241,87 @@ mod tests {
         assert_eq!(counts(&mut v), (0, vec![]));
         v.set_event_display(EventDisplay::All);
         assert_eq!(counts(&mut v).0, 4);
+    }
+
+    /// Whole frames, drawn headless: stacked panels and the overlay with
+    /// fractions and event labels, the event display changing between frames.
+    #[test]
+    fn frames_draw_fractions_and_labels_in_every_view() {
+        let mut app = rc_core::AppState::new();
+        for i in 0..=40 {
+            let v = i as f64 * 0.5;
+            app.inst.cum_time_ms = v * 60_000.0;
+            app.inst.cum_vol_ml = v;
+            app.push_trend(rc_core::TrendPoint {
+                cum_time_ms: v * 60_000.0,
+                cum_vol_ml: v,
+                pctb: v * 5.0,
+                ..Default::default()
+            });
+            match i {
+                2 => app.push_event(EventKind::Step, "Step t=60.0s  v=1.0000mL"),
+                4 => {
+                    app.inst.fraction_vol_ml = 2.0;
+                    app.update_fraction_state();
+                    app.push_event(EventKind::Log, "Fraction size 2.0 ml");
+                }
+                8 | 12 | 16 => {
+                    let n = app.feed_next_tube();
+                    app.push_event(EventKind::Tubefeed, format!("Feed Tube Nr {n}"));
+                }
+                18 => app.push_event(EventKind::Step, "Step t=540.0s  v=9.0000mL"),
+                _ => {}
+            }
+        }
+        assert_eq!(app.fractions.len(), 4);
+        let mut v = RunView::new(
+            app.shared(),
+            RunViewOptions {
+                viewer: true,
+                start_panels: rc_plotdata::Channel::ALL
+                    .iter()
+                    .map(|c| c.name().to_string())
+                    .collect(),
+            },
+        );
+        let ctx = egui::Context::default();
+        let frame = |v: &mut RunView| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 900.0))),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| v.ui(ui))
+                .drop_without_applying_deltas();
+        };
+        for overlay in [false, true] {
+            v.overlay = overlay;
+            for d in [
+                EventDisplay::All,
+                EventDisplay::NoSteps,
+                EventDisplay::None,
+                EventDisplay::All,
+            ] {
+                let label_gen = v.derived.label_gen;
+                let before = v.derived.label_x.len();
+                v.set_event_display(d);
+                frame(&mut v);
+                frame(&mut v);
+                // a new label set always comes with a new layout key
+                if v.derived.label_x.len() != before {
+                    assert_ne!(v.derived.label_gen, label_gen);
+                }
+                // a layout made for the current labels has one anchor per label
+                if v.labels.key.map(|k| k[0]) == Some(v.derived.label_gen) {
+                    assert_eq!(v.labels.pos.len(), v.derived.label_x.len());
+                }
+            }
+        }
+        assert_eq!(v.derived.spans.len(), 4);
+        // the Fractions switch: a frame drawn without them
+        assert!(v.shows_fractions());
+        v.set_show_fractions(false);
+        frame(&mut v);
+        assert!(!v.shows_fractions());
     }
 
     #[test]

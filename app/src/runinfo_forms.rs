@@ -1,11 +1,13 @@
-//! Run information forms. The column and buffers come with the PC method a run
-//! starts from (its run setup, written in the method editor); what is left is
-//! asked for here:
+//! Run information forms, every field in each. The column and buffers come
+//! with the PC method a run starts from (its run setup, written in the method
+//! editor) and are filled in; a method started from the instrument's own memory
+//! has none, so they can be given here too:
 //!
 //! * when a run starts, a window (not modal: recording goes on) asks for the
-//!   sample, the user and notes of that run; it stays until answered and moves
-//!   on to a newer run if one starts first. The Live page's Run info card
-//!   reopens it ("Edit").
+//!   run information, filled in with what is recorded (the run setup) and the
+//!   last user; it stays until answered and moves on to a newer run if one
+//!   starts first. The Live page's Run info card reopens it ("Edit") while the
+//!   run goes on; changed fields are recorded in the log at once.
 //! * an opened run (a finished log) can be given any run information later
 //!   ("Edit run info"); it is appended to the end of the CSV file.
 
@@ -16,7 +18,7 @@ use egui::{Align, Align2, Layout, Margin, RichText, Ui};
 use parking_lot::Mutex;
 use rc_core::AppState;
 use rc_core::runinfo::{
-    METHOD_NOTES_KEY, PER_RUN_FIELDS, RUN_INFO_FIELDS, column_volume_ok, field_label,
+    METHOD_NOTES_KEY, METHOD_SETUP_FIELDS, RUN_INFO_FIELDS, column_volume_ok, field_label,
     is_multiline_field, normalize_column_volume, run_info,
 };
 use rc_theme::{FS_BODY, FS_SMALL, medium, palette, semibold};
@@ -26,9 +28,9 @@ use crate::console::display_name;
 /// What a form is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FormKind {
-    /// a run has just started: sample, user, notes
+    /// a run has just started
     NewRun,
-    /// the Live page's "Edit": sample, user, notes of the current run
+    /// the Live page's "Edit": the current run, while it goes on
     LiveEdit,
     /// an opened log: every run information field, appended to the file
     Viewer,
@@ -50,12 +52,7 @@ const COLUMN_VOLUME: &str = "Column volume (mL)";
 
 impl InfoForm {
     fn with(kind: FormKind, log: &Path, values: &BTreeMap<String, String>) -> InfoForm {
-        let keys: &[&str] = if kind == FormKind::Viewer {
-            &RUN_INFO_FIELDS
-        } else {
-            &PER_RUN_FIELDS
-        };
-        let fields = keys
+        let fields = RUN_INFO_FIELDS
             .iter()
             .map(|k| (k.to_string(), values.get(*k).cloned().unwrap_or_default()))
             .collect();
@@ -67,34 +64,33 @@ impl InfoForm {
         }
     }
 
-    /// A new run: empty but for the last user name.
-    pub fn new_run(log: &Path, last_user: &str) -> InfoForm {
-        let mut values = BTreeMap::new();
-        values.insert("User".to_string(), last_user.to_string());
-        InfoForm::with(FormKind::NewRun, log, &values)
+    /// A new run: what is recorded for it so far (its method's run setup) and
+    /// the last user name.
+    pub fn new_run(log: &Path, recorded: &BTreeMap<String, String>, last_user: &str) -> InfoForm {
+        InfoForm::live(FormKind::NewRun, log, recorded, last_user)
     }
 
-    /// The current run's sample, user and notes as recorded (the last user if none).
+    /// The current run's information as recorded (the last user if none).
     pub fn live_edit(log: &Path, recorded: &BTreeMap<String, String>, last_user: &str) -> InfoForm {
+        InfoForm::live(FormKind::LiveEdit, log, recorded, last_user)
+    }
+
+    fn live(
+        kind: FormKind,
+        log: &Path,
+        recorded: &BTreeMap<String, String>,
+        last_user: &str,
+    ) -> InfoForm {
         let mut values = recorded.clone();
         values
             .entry("User".to_string())
             .or_insert_with(|| last_user.to_string());
-        InfoForm::with(FormKind::LiveEdit, log, &values)
+        InfoForm::with(kind, log, &values)
     }
 
     /// Every field of an opened run, with its latest recorded value.
     pub fn viewer(log: &Path, recorded: &BTreeMap<String, String>) -> InfoForm {
         InfoForm::with(FormKind::Viewer, log, recorded)
-    }
-
-    /// The fields of this form, in their order.
-    pub fn keys(&self) -> &'static [&'static str] {
-        if self.kind == FormKind::Viewer {
-            &RUN_INFO_FIELDS
-        } else {
-            &PER_RUN_FIELDS
-        }
     }
 
     pub fn title(&self) -> String {
@@ -150,9 +146,17 @@ pub struct LivePrompt {
 }
 
 impl LivePrompt {
-    /// Follow the live state: a new run opens the form, or moves an unanswered
-    /// one to the new run (what was typed is kept). True when it did.
-    pub fn update(&mut self, run_serial: u64, log: &Path, last_user: &str) -> bool {
+    /// Follow the live state: a new run opens the form (with what is recorded
+    /// for it), or moves an unanswered one to the new run: what was typed is
+    /// kept, but the new run's own run setup replaces the column and buffers.
+    /// True when it did.
+    pub fn update(
+        &mut self,
+        run_serial: u64,
+        log: &Path,
+        recorded: &BTreeMap<String, String>,
+        last_user: &str,
+    ) -> bool {
         if run_serial == self.seen_serial {
             return false;
         }
@@ -162,10 +166,20 @@ impl LivePrompt {
                 form.kind = FormKind::NewRun;
                 form.log = log.to_path_buf();
                 form.error.clear();
+                for key in METHOD_SETUP_FIELDS {
+                    if let Some(v) = recorded.get(key) {
+                        form.fields.insert(key.to_string(), v.clone());
+                    }
+                }
             }
-            None => self.form = Some(InfoForm::new_run(log, last_user)),
+            None => self.form = Some(InfoForm::new_run(log, recorded, last_user)),
         }
         true
+    }
+
+    /// The last run the form followed (`update`).
+    pub fn seen_serial(&self) -> u64 {
+        self.seen_serial
     }
 
     /// The Run info card's "Edit": the current run's form (an open one is kept).
@@ -262,8 +276,9 @@ pub enum FormAction {
 /// Draw `form` as a window (not modal) over the page.
 pub fn show_form(ctx: &egui::Context, form: &mut InfoForm, id: egui::Id) -> FormAction {
     let t = palette(ctx);
-    let wide = form.kind == FormKind::Viewer;
-    let width = if wide { 640.0 } else { 400.0 };
+    // the live form near the top, an opened run's in the middle: both can be open
+    let centred = form.kind == FormKind::Viewer;
+    let width = 640.0;
     let screen = ctx.content_rect();
     let mut action = FormAction::None;
     egui::Window::new(form.title())
@@ -271,13 +286,12 @@ pub fn show_form(ctx: &egui::Context, form: &mut InfoForm, id: egui::Id) -> Form
         .title_bar(false)
         .collapsible(false)
         .resizable(false)
-        // the live form near the top, an opened run's in the middle: both can be open
-        .pivot(if wide {
+        .pivot(if centred {
             Align2::CENTER_CENTER
         } else {
             Align2::CENTER_TOP
         })
-        .default_pos(if wide {
+        .default_pos(if centred {
             screen.center()
         } else {
             egui::pos2(screen.center().x, screen.top() + 72.0)
@@ -296,12 +310,7 @@ pub fn show_form(ctx: &egui::Context, form: &mut InfoForm, id: egui::Id) -> Form
             ui.set_width(width);
             header(ui, form);
             ui.add_space(10.0);
-            if wide {
-                viewer_fields(ui, form);
-            } else {
-                let keys = form.keys();
-                grid(ui, form, keys, width, "rc-runinfo-form");
-            }
+            fields(ui, form);
             ui.add_space(6.0);
             let problems = form.problems();
             if let Some(p) = problems.first() {
@@ -324,9 +333,15 @@ fn header(ui: &mut Ui, form: &InfoForm) {
     let (title, note) = match form.kind {
         FormKind::NewRun => (
             "New run started",
-            "Recording goes on. Column and buffers come from the method's run setup.",
+            "Recording goes on. Column and buffers come from the PC method's run setup; \
+             for a method started on the Akta, give them here. All can be changed while \
+             the run goes on (Run info card: Edit).",
         ),
-        FormKind::LiveEdit => ("Run info", "Sample, user and notes of the current run."),
+        FormKind::LiveEdit => (
+            "Run info",
+            "The current run. Changed fields are recorded in the log at once; an emptied \
+             field keeps its old value.",
+        ),
         FormKind::Viewer => (
             "Edit run info",
             "Changed fields are added to the end of the log; nothing in it is rewritten. \
@@ -400,8 +415,8 @@ fn grid(ui: &mut Ui, form: &mut InfoForm, keys: &[&str], width: f32, id: &str) {
         });
 }
 
-/// The opened run's form: run details left, buffer valve right (as the old Run info page).
-fn viewer_fields(ui: &mut Ui, form: &mut InfoForm) {
+/// The fields: run details left, buffer valve right.
+fn fields(ui: &mut Ui, form: &mut InfoForm) {
     let t = palette(ui.ctx());
     let left = [
         "Sample",
@@ -477,40 +492,63 @@ mod tests {
             .collect()
     }
 
+    /// Every run information field, empty but for `pairs`.
+    fn all_fields(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        let mut m: BTreeMap<String, String> = RUN_INFO_FIELDS
+            .iter()
+            .map(|k| (k.to_string(), String::new()))
+            .collect();
+        m.extend(map(pairs));
+        m
+    }
+
     #[test]
     fn new_run_opens_and_moves() {
         let mut p = LivePrompt::default();
+        let none = BTreeMap::new();
         // no run yet
-        assert!(!p.update(0, Path::new("a.csv"), "Alex"));
+        assert!(!p.update(0, Path::new("a.csv"), &none, "Alex"));
         assert!(p.form.is_none());
         // the first run (also one that started while the window opened)
-        assert!(p.update(3, Path::new("a.csv"), "Alex"));
+        assert!(p.update(3, Path::new("a.csv"), &none, "Alex"));
         p.form = None; // skipped
-        assert!(!p.update(3, Path::new("a.csv"), "Alex"));
+        assert!(!p.update(3, Path::new("a.csv"), &none, "Alex"));
         assert!(p.form.is_none());
-        assert!(p.update(4, Path::new("b.csv"), "Alex"));
+        // a run of a PC method: its run setup is filled in, every field can be changed
+        let setup = map(&[("Column", "S200"), ("Column volume (mL)", "24")]);
+        assert!(p.update(4, Path::new("b.csv"), &setup, "Alex"));
         let form = p.form.as_mut().unwrap();
         assert_eq!(form.kind, FormKind::NewRun);
         assert_eq!(form.title(), "New run started — b.csv");
-        assert_eq!(form.keys(), PER_RUN_FIELDS);
         assert_eq!(
             form.fields,
-            map(&[("Sample", ""), ("User", "Alex"), ("Notes", "")])
+            all_fields(&[
+                ("User", "Alex"),
+                ("Column", "S200"),
+                ("Column volume (mL)", "24")
+            ])
         );
         form.fields.insert("Sample".into(), "Lysozyme".into());
+        form.fields.insert("Port 3".into(), "Tris".into());
         // the same run again: nothing changes
-        assert!(!p.update(4, Path::new("b.csv"), "x"));
-        // another run before it was answered: the form moves there, keeping what was typed
-        assert!(p.update(5, Path::new("c.csv"), "x"));
+        assert!(!p.update(4, Path::new("b.csv"), &none, "x"));
+        // another run before it was answered: the form moves there, keeping what
+        // was typed; its own run setup replaces the column
+        let other = map(&[("Column", "HisTrap"), ("Column volume (mL)", "1")]);
+        assert!(p.update(5, Path::new("c.csv"), &other, "x"));
         let form = p.form.as_ref().unwrap();
         assert_eq!(form.log, Path::new("c.csv"));
         assert_eq!(form.fields["Sample"], "Lysozyme");
         assert_eq!(form.fields["User"], "Alex");
-        // answered (closed): the next run opens a fresh one
+        assert_eq!(form.fields["Port 3"], "Tris");
+        assert_eq!(form.fields["Column"], "HisTrap");
+        assert_eq!(form.fields["Column volume (mL)"], "1");
+        // answered (closed): the next run opens a fresh one; a method started
+        // on the Akta has no run setup, so the column volume is empty to fill in
         p.form = None;
-        assert!(p.update(6, Path::new("d.csv"), "Anna"));
-        assert_eq!(p.form.as_ref().unwrap().fields["User"], "Anna");
-        assert_eq!(p.form.as_ref().unwrap().fields["Sample"], "");
+        assert!(p.update(6, Path::new("d.csv"), &none, "Anna"));
+        let form = p.form.as_ref().unwrap();
+        assert_eq!(form.fields, all_fields(&[("User", "Anna")]));
     }
 
     #[test]
@@ -522,7 +560,12 @@ mod tests {
         assert_eq!(form.kind, FormKind::LiveEdit);
         assert_eq!(
             form.fields,
-            map(&[("Sample", "BSA"), ("User", "Alex"), ("Notes", "n")])
+            all_fields(&[
+                ("Sample", "BSA"),
+                ("User", "Alex"),
+                ("Column", "S200"),
+                ("Notes", "n")
+            ])
         );
         // an open form for that run is kept as it is
         p.form
@@ -533,7 +576,7 @@ mod tests {
         p.edit(Path::new("a.csv"), &recorded, "Alex");
         assert_eq!(p.form.as_ref().unwrap().fields["Sample"], "typed");
         // a new run moves it and makes it the new-run form
-        assert!(p.update(1, Path::new("b.csv"), "Alex"));
+        assert!(p.update(1, Path::new("b.csv"), &BTreeMap::new(), "Alex"));
         assert_eq!(p.form.as_ref().unwrap().kind, FormKind::NewRun);
     }
 
@@ -545,7 +588,7 @@ mod tests {
         app.log = Some(CsvLog::create(&app.log_filename).unwrap());
         app.push_event(EventKind::Info, "User: Alex");
         let app = Mutex::new(app);
-        let mut form = InfoForm::new_run(&app.lock().log_filename, "Alex");
+        let mut form = InfoForm::new_run(&app.lock().log_filename, &BTreeMap::new(), "Alex");
         form.fields.insert("Sample".into(), " Lysozyme ".into());
         form.fields.insert("Notes".into(), "two\nlines".into());
         assert_eq!(save_live(&app, &form).unwrap(), "Recorded in run.csv.");
@@ -574,6 +617,32 @@ mod tests {
         assert_eq!(run_info(&back.events)["Sample"], "BSA");
     }
 
+    /// A run of a method started on the Akta has no run setup: the column and
+    /// its volume are given while it runs, and the column volume axis has it.
+    #[test]
+    fn column_volume_given_during_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = AppState::new();
+        app.log_filename = dir.path().join("run.csv");
+        app.log = Some(CsvLog::create(&app.log_filename).unwrap());
+        app.push_event(EventKind::Info, "Sample: BSA");
+        let app = Mutex::new(app);
+        let recorded = recorded(&app.lock());
+        let mut form = InfoForm::live_edit(&app.lock().log_filename, &recorded, "Alex");
+        assert_eq!(form.fields["Sample"], "BSA");
+        assert_eq!(form.fields[COLUMN_VOLUME], "");
+        form.fields.insert("Column".into(), "Superdex 200".into());
+        form.fields.insert(COLUMN_VOLUME.into(), "24,0".into());
+        assert_eq!(save_live(&app, &form).unwrap(), "Recorded in run.csv.");
+        let info = run_info(&app.lock().events);
+        assert_eq!(info["Column"], "Superdex 200");
+        assert_eq!(info[COLUMN_VOLUME], "24.0");
+        assert_eq!(rc_core::runinfo::column_volume(&info), 24.0);
+        // a wrong value is not saved
+        form.fields.insert(COLUMN_VOLUME.into(), "big".into());
+        assert!(save_live(&app, &form).is_err());
+    }
+
     #[test]
     fn viewer_save_appends_and_refuses_the_recording_log() {
         let dir = tempfile::tempdir().unwrap();
@@ -592,7 +661,6 @@ mod tests {
         }
         let mut viewer = load_csv_log(&path).unwrap();
         let mut form = InfoForm::viewer(&path, &recorded(&viewer));
-        assert_eq!(form.keys(), RUN_INFO_FIELDS);
         assert_eq!(form.fields["Column"], "S200");
         assert_eq!(form.fields.len(), RUN_INFO_FIELDS.len());
         form.fields
@@ -664,9 +732,9 @@ mod tests {
         let back = run_info(&load_csv_log(&path).unwrap().events);
         assert_eq!(back[METHOD_NOTES_KEY], "changed notes");
         assert_eq!(back["Notes"], "run");
-        // the run's own form does not ask for the method's notes
+        // the run's own form has every field too
         assert!(
-            !InfoForm::new_run(&path, "")
+            InfoForm::new_run(&path, &BTreeMap::new(), "")
                 .fields
                 .contains_key(METHOD_NOTES_KEY)
         );

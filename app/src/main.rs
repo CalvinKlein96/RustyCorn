@@ -250,7 +250,7 @@ fn run_replay(path: &Path, gpu: Option<GpuBackend>) -> ExitCode {
     }
     log::info!("Replay mode - loading \"{}\"", path.display());
     let settings = load_settings(gpu);
-    let mut app = match rc_core::csvlog::load_csv_log(path) {
+    let mut app = match rc_core::csvlog::load_csv_log_with_delay(path, settings.fraction_delay_ml) {
         Ok(app) => app,
         Err(err) => {
             log::error!("Could not read {}: {err}", path.display());

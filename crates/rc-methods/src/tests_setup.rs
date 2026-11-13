@@ -181,9 +181,10 @@ fn setup_moves_with_its_method() {
 
 #[test]
 fn run_start_dump_matches_its_method_file() {
-    // The files are decoded dumps: the run-start dump of a loaded PC method
-    // reads as its file. Check with the instrument's own files, sent escaped
-    // as the Akta sends a dump.
+    // The files are decoded dumps: a dump with a file's content matches it.
+    // Check with the instrument's own files, sent escaped as the Akta sends a
+    // dump (the real run-start dump of a PC method also names it: see
+    // a_loaded_pc_method_is_found_by_its_number_and_content).
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     let one = instrument_file("PrimeMeth_001.txt");
@@ -236,6 +237,66 @@ fn run_start_dump_matches_its_method_file() {
     fs::write(method_path(dir, 9), b"").unwrap();
     assert_eq!(
         match_stored_method(dir, &parse_method_dump(b"garbage"), 0),
+        None
+    );
+}
+
+/// The run-start dump of PC method 9 on an ÄKTAprime (debug run, 2026-11-13):
+/// "Method Type" "PC Method" and "Method" "9" where its file has "-".
+const PC_METHOD_9_DUMP: &str = "{l{5}{2 Method Dump}{2}{2 AKTAprime|3Ver|2, V2.01|?}{2}{2 Dump Format Ver|2, V1.00|?}{2}{l{5}}}{B}{2 Method Settings}{B}Method Type|8,PC Method}Method|=,9}Method base|8,ml}Frac base|:,ml}Max pressure (kPa) ,1000}Alarm (min/ml)|5,0.0}}{E}{2 Method Breakpoints}{E}|E}Brkp Volume|3Conc Flow|2Frac|3Buff Inj|4Peak|3Autozzero Eventmark}|Z(mAu/min)}},1|3,0.0|5,0|3,0.5|2,1.0|3,1|3,Load|2,0|5,Y|7,N},2|3,1.0|5,0|3,0.5|2,0.0|3,1|3,Load|2,0|5,N|7,N},3|3,1.5|5,0|3,0.5|2,1.0|3,1|3,Load|2,0|5,N|7,N},4|3,4.0|5,0|3,0.5|2,0.0|3,1|3,Load|2,0|5,N|7,N}";
+
+#[test]
+fn a_loaded_pc_method_is_found_by_its_number_and_content() {
+    let dump = parse_method_dump(PC_METHOD_9_DUMP.as_bytes());
+    assert_eq!(pc_method_number(&dump), Some(9));
+    // the file the PC sent: "-" where the dump says where the method is kept
+    let file = unescape_method_text(
+        PC_METHOD_9_DUMP
+            .replace(
+                "Method Type|8,PC Method}Method|=,9}",
+                "Method Type|8,-}Method|=,-}",
+            )
+            .as_bytes(),
+    );
+    assert_eq!(pc_method_number(&parse_method_text(&file)), None);
+
+    // stored as 9: its run setup is the run's
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    save_method_file(dir, 9, &file).unwrap();
+    set_method_setup(
+        dir,
+        9,
+        &setup(&[("Column", "Superdex 200"), ("Column volume (mL)", "24")]),
+    )
+    .unwrap();
+    assert_eq!(match_stored_method(dir, &dump, 0), Some(9));
+    let info = run_setup_for_dump(dir, &dump, 9);
+    assert_eq!(info["Column"], "Superdex 200");
+    assert_eq!(info["Column volume (mL)"], "24");
+    assert_eq!(info[METHOD_REF_KEY], "009");
+
+    // stored under another number only: found by its content
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    save_method_file(dir, 4, &file).unwrap();
+    assert_eq!(match_stored_method(dir, &dump, 0), Some(4));
+    // and so is a copy in the instrument's memory
+    let memory = parse_method_dump(
+        PC_METHOD_9_DUMP
+            .replace(
+                "Method Type|8,PC Method}Method|=,9}",
+                "Method Type|8,Manaul Method}Method|=,3}",
+            )
+            .as_bytes(),
+    );
+    assert_eq!(pc_method_number(&memory), None);
+    assert_eq!(match_stored_method(dir, &memory, 0), Some(4));
+    // a different method stays unmatched
+    let other = PC_METHOD_9_DUMP.replace(",4|3,4.0|", ",4|3,5.0|");
+    assert_ne!(other, PC_METHOD_9_DUMP);
+    assert_eq!(
+        match_stored_method(dir, &parse_method_dump(other.as_bytes()), 0),
         None
     );
 }

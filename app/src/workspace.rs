@@ -169,7 +169,8 @@ impl<'a> Workspace<'a> {
                     SHOW_OVERLAY | SHOW_RUN_LOG => ws.set_run_view(ws.active, name == SHOW_OVERLAY),
                     NO_RUN_PROMPT => ws.run_prompt = false,
                     _ if name.to_lowercase().ends_with(".csv") => {
-                        match rc_core::csvlog::load_csv_log(Path::new(name)) {
+                        let delay = ws.acq.settings.fraction_delay_ml;
+                        match rc_core::csvlog::load_csv_log_with_delay(Path::new(name), delay) {
                             Ok(app) => ws.add_run_page(PathBuf::from(name), app),
                             Err(err) => log::error!("Could not open {name}: {err}"),
                         }
@@ -289,7 +290,7 @@ impl<'a> Workspace<'a> {
         }
     }
 
-    /// A new run on the Live source opens (or moves) the form for its sample, user and notes.
+    /// A new run on the Live source opens (or moves) the form for its run information.
     fn follow_runs(&mut self) {
         if self.mode != Mode::Live || !self.run_prompt {
             return;
@@ -298,9 +299,10 @@ impl<'a> Workspace<'a> {
             let app = self.acq.app.lock();
             (app.run_serial, app.log_filename.clone(), app.live)
         };
-        if live {
+        if live && serial != self.live_prompt.seen_serial() {
+            let recorded = runinfo_forms::recorded(&self.acq.app.lock());
             self.live_prompt
-                .update(serial, &log, &self.acq.settings.last_user);
+                .update(serial, &log, &recorded, &self.acq.settings.last_user);
         }
     }
 
@@ -421,10 +423,11 @@ impl<'a> Workspace<'a> {
         let tx = self.open_tx.clone();
         let ctx = ctx.clone();
         let job_path = path.clone();
+        let delay = self.acq.settings.fraction_delay_ml;
         let spawned = std::thread::Builder::new()
             .name("open run".into())
             .spawn(move || {
-                let result = rc_core::csvlog::load_csv_log(&job_path);
+                let result = rc_core::csvlog::load_csv_log_with_delay(&job_path, delay);
                 let _ = tx.send(OpenMsg::Loaded(job_path, Box::new(result)));
                 ctx.request_repaint();
             });

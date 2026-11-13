@@ -59,7 +59,7 @@ pub fn is_multiline_field(key: &str) -> bool {
     key == "Notes" || key == METHOD_NOTES_KEY
 }
 
-/// The fields asked for at every run start.
+/// The fields that belong to the run itself, not to its method's run setup.
 pub const PER_RUN_FIELDS: [&str; 3] = ["Sample", "User", "Notes"];
 
 /// Which PC method the run was started from ("005 – Gel filtration"); recorded

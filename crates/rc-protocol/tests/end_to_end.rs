@@ -279,7 +279,7 @@ fn record_a_run_and_read_it_back() {
         .iter()
         .position(|(k, t)| *k == EventKind::Log && t.starts_with("Method start:"))
         .unwrap();
-    let run = pos(EventKind::RunState, "Run state: Run  inject=IV_LOAD");
+    let run = pos(EventKind::RunState, "Run state: Run");
     let frac = pos(EventKind::Log, "Fraction size 1.0 ml");
     let mark = pos(EventKind::Mark, "Peak 1; top");
     let sample = pos(EventKind::Info, "Sample: Lysate; clarified");

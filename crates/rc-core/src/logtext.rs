@@ -17,6 +17,9 @@ static BUFFER_VALVE_RE: LazyLock<Regex> = LazyLock::new(|| {
 static FRACTION_SIZE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^Fraction size\s+([0-9]+(?:\.[0-9]+)?)\s+ml$").expect("valid regex")
 });
+// The instrument's own word for fraction size 0 (a "Fraction Off" method step).
+static FRACTION_OFF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^Fraction\s+Off$").expect("valid regex"));
 static FEED_TUBE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^Feed Tube Nr\s+(\d+)$").expect("valid regex"));
 
@@ -49,9 +52,14 @@ pub fn flow_from_log(text: &str) -> Option<f64> {
     caps[1].parse().ok()
 }
 
-/// Fraction size in mL from a "Fraction size 1.0 ml" message (0 = to waste).
+/// Fraction size in mL from a "Fraction size 1.0 ml" message (0 = to waste);
+/// "Fraction Off" is size 0.
 pub fn fraction_size_from_log(text: &str) -> Option<f64> {
-    let caps = FRACTION_SIZE_RE.captures(trim_space(text))?;
+    let text = trim_space(text);
+    if FRACTION_OFF_RE.is_match(text) {
+        return Some(0.0);
+    }
+    let caps = FRACTION_SIZE_RE.captures(text)?;
     caps[1].parse().ok()
 }
 
@@ -224,6 +232,16 @@ mod tests {
         assert_eq!(app.inst.current_fraction_idx, None);
         assert_eq!(app.fractions[2].end_time_ms, Some(3000.0));
 
+        // "Fraction Off" (a method step) stops as size 0 does
+        assert!(set_fraction_from_log("Fraction size 2.0 ml", &mut app));
+        assert_eq!(app.fractions.len(), 4);
+        app.inst.cum_time_ms = 4000.0;
+        assert!(set_fraction_from_log(" fraction off ", &mut app));
+        assert_eq!(app.inst.fraction_vol_ml, 0.0);
+        assert_eq!(app.inst.current_fraction_idx, None);
+        assert_eq!(app.fractions[3].end_time_ms, Some(4000.0));
+        assert!(!set_fraction_from_log("Fraction Off now", &mut app));
+
         // anchored: these do not match
         assert!(!set_fraction_from_log("Fraction size 1.0 ml/min", &mut app));
         assert!(!set_fraction_from_log("New Fraction size 1.0 ml", &mut app));
@@ -233,7 +251,7 @@ mod tests {
             "Feed Tube Nr 99999999999999999999999",
             &mut app
         ));
-        assert_eq!(app.fractions.len(), 3);
+        assert_eq!(app.fractions.len(), 4);
         // no events are recorded by the decoder itself
         assert!(app.events.iter().all(|e| e.kind != EventKind::Log));
     }

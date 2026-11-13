@@ -10,7 +10,7 @@ use std::io::Write;
 use rc_core::csvlog::log_side_file;
 use rc_core::logtext;
 use rc_core::opc::*;
-use rc_core::{AppState, EventKind, InjectValue, TrendPoint};
+use rc_core::{AppState, EventKind, TrendPoint};
 
 use crate::frame::{le_uint, printable};
 
@@ -112,14 +112,10 @@ pub fn handle_base_time_vol(data: &[u8], app: &mut AppState) {
     );
 }
 
-fn inject_from_runstate(raw: u8) -> InjectValue {
-    if raw == 0x00 {
-        InjectValue::Load
-    } else {
-        InjectValue::Inject
-    }
-}
-
+/// Run state (byte 8), run time and volume. Byte 9 is not the injection valve:
+/// an ÄKTAprime sends a non-zero value there in every run state, whatever the
+/// valve does, so the valve is only taken from the method ("Method start: …
+/// inject Load") and the "Injection Valve …" log messages.
 pub fn handle_run_state(data: &[u8], app: &mut AppState) {
     if data.len() < 10 {
         log::warn!("OPC 0x2003: short payload");
@@ -128,11 +124,10 @@ pub fn handle_run_state(data: &[u8], app: &mut AppState) {
     let run_time_raw = le_uint(data, 0, 3);
     let run_vol_raw = le_uint(data, 4, 3);
     let state_name = run_state_name(data[8]);
-    let inject = inject_from_runstate(data[9]);
     let run_time_ms = run_time_raw as f64 / 10.0;
     let run_vol_ml = app.vol_ml(run_vol_raw as f64);
 
-    let changed = app.inst.run_state != state_name || app.inst.inject_value != inject;
+    let changed = app.inst.run_state != state_name;
 
     // Roll to a fresh log on a new run before recording anything for it, so the
     // run-start event and its trend data land in the new file, which opens with
@@ -149,15 +144,13 @@ pub fn handle_run_state(data: &[u8], app: &mut AppState) {
     inst.run_state = state_name;
     inst.run_time_ms = run_time_ms;
     inst.run_vol_ml = run_vol_ml;
-    inst.inject_value = inject;
+    if changed && app.inst.run_state == "End" {
+        app.end_fractionation();
+    }
     app.touch();
 
     if changed {
-        let txt = format!(
-            "Run state: {}  inject={}",
-            app.inst.run_state,
-            inject.name()
-        );
+        let txt = format!("Run state: {}", app.inst.run_state);
         app.push_event(EventKind::RunState, txt);
     }
 }
@@ -212,20 +205,19 @@ pub fn handle_log_message(opc: u16, data: &[u8], app: &mut AppState) {
     }
 }
 
+/// The fraction collector moved to a tube. An ÄKTAprime sends 10 bytes: run time
+/// and volume (bytes 0–7, as in the other state messages) and the tube number
+/// (bytes 8–9, little-endian; 0 when fractionation ends). A shorter message
+/// moves on to the next tube. The number goes into the log as "Feed Tube Nr N".
 pub fn handle_tubefeed(data: &[u8], app: &mut AppState) {
-    if data.len() >= 10 {
-        let tube_no = data[8] as i64 | ((data[9] as i64) << 8);
-        app.inst.fraction_number = tube_no.max(1);
+    let tube = if data.len() >= 10 {
+        let n = i64::from(u16::from_le_bytes([data[8], data[9]]));
+        app.feed_tube(n);
+        n
     } else {
-        app.inst.fraction_number += 1;
-    }
-    // Update fraction state machine
-    app.update_fraction_state();
-    app.touch();
-    app.push_event(
-        EventKind::Tubefeed,
-        format!("Tubefeed event ({} bytes)", data.len()),
-    );
+        app.feed_next_tube()
+    };
+    app.push_event(EventKind::Tubefeed, format!("Feed Tube Nr {tube}"));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -528,7 +520,8 @@ mod tests {
         );
         assert_eq!(a.inst.run_state, "Run");
         assert_eq!((a.inst.run_time_ms, a.inst.run_vol_ml), (321_193.0, 25.0));
-        assert_eq!(a.inst.inject_value, InjectValue::Inject);
+        // byte 9 is not the injection valve (an ÄKTAprime always sends 1 there)
+        assert_eq!(a.inst.inject_value, InjectValue::Unknown);
         // the same state again records no event
         dispatch_rx_opc(
             &mut a,
@@ -556,14 +549,8 @@ mod tests {
         assert_eq!(
             texts(&a),
             vec![
-                (
-                    EventKind::RunState,
-                    "Run state: Run  inject=IV_INJECT".to_string()
-                ),
-                (
-                    EventKind::RunState,
-                    "Run state: Unknown(0x7)  inject=IV_LOAD".to_string()
-                ),
+                (EventKind::RunState, "Run state: Run".to_string()),
+                (EventKind::RunState, "Run state: Unknown(0x7)".to_string()),
                 (
                     EventKind::Step,
                     "Step t=123.5s  v=1234567.8900mL".to_string()
@@ -616,7 +603,7 @@ mod tests {
                 .file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("test_")
+                .ends_with("_test.csv")
         );
         assert!(a.trend.is_empty() && a.pending_method_event.is_none());
         assert_eq!(
@@ -624,10 +611,7 @@ mod tests {
             vec![
                 (EventKind::Info, "Column: Superdex".to_string()),
                 (EventKind::Log, "Method start: flow 0.5 ml/min".to_string()),
-                (
-                    EventKind::RunState,
-                    "Run state: Run  inject=IV_LOAD".to_string()
-                ),
+                (EventKind::RunState, "Run state: Run".to_string()),
             ]
         );
         let rows = csv_rows(&a.log_filename);
@@ -682,13 +666,14 @@ mod tests {
         dispatch_rx_opc(&mut a, OPC_LOG_SINGLE, b"Fraction size 1.0 ml");
         assert_eq!(a.fractions.len(), 1);
         dispatch_rx_opc(&mut a, OPC_TREND_DATA, &TRENDS[0]);
+        // the tube number is in bytes 8–9
         let mut tube = [0u8; 10];
         tube[8] = 2;
         dispatch_rx_opc(&mut a, OPC_TUBEFEED, &tube);
         assert_eq!(a.fractions.len(), 2);
         assert_eq!(a.fractions[0].end_time_ms, Some(100_100.0));
         assert_eq!(a.fractions[1].fraction_number, 2);
-        dispatch_rx_opc(&mut a, OPC_TUBEFEED, &[0u8; 4]); // short: next tube
+        dispatch_rx_opc(&mut a, OPC_TUBEFEED, &[0u8; 4]); // short: the next tube
         assert_eq!(a.inst.fraction_number, 3);
         assert_eq!(a.fractions.len(), 3);
         dispatch_rx_opc(&mut a, OPC_LOG_SINGLE, b"Fraction size 0.0 ml");
@@ -703,8 +688,8 @@ mod tests {
                 (EventKind::Log, "Injection Valve Inj".to_string()),
                 (EventKind::Log, "Flow 0.5 ml/min".to_string()),
                 (EventKind::Log, "Fraction size 1.0 ml".to_string()),
-                (EventKind::Tubefeed, "Tubefeed event (10 bytes)".to_string()),
-                (EventKind::Tubefeed, "Tubefeed event (4 bytes)".to_string()),
+                (EventKind::Tubefeed, "Feed Tube Nr 2".to_string()),
+                (EventKind::Tubefeed, "Feed Tube Nr 3".to_string()),
                 (EventKind::Log, "Fraction size 0.0 ml".to_string()),
                 (EventKind::Inject, "Inject event (8 bytes)".to_string()),
             ]
@@ -751,6 +736,268 @@ mod tests {
             lines[0].ends_with("  0x8004  n=15  466c6f7720302e35206d6c2f6d696e  |Flow 0.5 ml/min|")
         );
         assert!(lines[1][12..].starts_with("  TX 0x2016"));
+    }
+
+    /// Tube feeds as an ÄKTAprime sent them (raw capture of 2026-10-14):
+    /// tubes 1–4 of 3 ml, then tube 0 as fractionation ends, before "Fraction Off".
+    #[test]
+    fn tube_feeds_of_a_recorded_run() {
+        let mut a = app(10.0);
+        let hex = |s: &str| -> Vec<u8> {
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        };
+        let at = |a: &mut AppState, ms: f64| {
+            a.inst.cum_time_ms = ms;
+            a.inst.cum_vol_ml = ms / 60_000.0;
+        };
+        at(&mut a, 1000.0);
+        dispatch_rx_opc(&mut a, OPC_TUBEFEED, &hex("413f03006fc300000100"));
+        assert!(a.fractions.is_empty() && a.inst.fraction_number == 1);
+        dispatch_rx_opc(&mut a, OPC_LOG_SINGLE, b"Fraction size 3.0 ml");
+        for (ms, payload) in [
+            (2000.0, "7c85030023cf00000200"),
+            (3000.0, "cccb0300d9da00000300"),
+            (4000.0, "1c12040090e600000400"),
+        ] {
+            at(&mut a, ms);
+            dispatch_rx_opc(&mut a, OPC_TUBEFEED, &hex(payload));
+        }
+        at(&mut a, 4500.0);
+        dispatch_rx_opc(&mut a, OPC_TUBEFEED, &hex("312b040040eb00000000")); // tube 0
+        assert_eq!(a.fractions.len(), 4, "tube 0 is no new tube");
+        assert_eq!(a.inst.current_fraction_idx, Some(3));
+        at(&mut a, 4600.0);
+        dispatch_rx_opc(&mut a, OPC_LOG_SINGLE, b"Fraction Off");
+        let got: Vec<(i64, f64, Option<f64>)> = a
+            .fractions
+            .iter()
+            .map(|f| (f.fraction_number, f.start_time_ms, f.end_time_ms))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (1, 1000.0, Some(2000.0)),
+                (2, 2000.0, Some(3000.0)),
+                (3, 3000.0, Some(4000.0)),
+                (4, 4000.0, Some(4600.0)),
+            ]
+        );
+        let feeds: Vec<&str> = a
+            .events
+            .iter()
+            .filter(|e| e.kind == EventKind::Tubefeed)
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(
+            feeds,
+            [
+                "Feed Tube Nr 1",
+                "Feed Tube Nr 2",
+                "Feed Tube Nr 3",
+                "Feed Tube Nr 4",
+                "Feed Tube Nr 0"
+            ]
+        );
+        // the log rebuilds to the same fractions
+        let mut back = AppState::new();
+        back.events = a.events.clone();
+        back.rebuild_fractions();
+        assert_eq!(back.fractions, a.fractions);
+    }
+
+    /// The received messages of a debug run on an ÄKTAprime (2026-11-13, raw
+    /// capture without the method dump): 1 ml fractions from 0 ml, fraction
+    /// off from 1 ml, 1 ml fractions again from 1.5 ml until the end at 4 ml.
+    /// The collector fed tube 2 at 1.000 ml, the stop sent tube 0 at 1.001 ml,
+    /// and the restart went on with tube 3.
+    const DEBUG_RUN_2026_11_13: &str = "\
+        0x2003 00000000000000000101
+        0x2002 0000000000000000
+        0x2005 01000000010000000100
+        0x8004 4672616374696f6e2073697a6520312e30206d6c
+        0x8004 466c6f7720302e35206d6c2f6d696e
+        0x2005 cc2e0000e80300000200
+        0x2005 e02e0000e90300000000
+        0x8004 427265616b20706f696e742032
+        0x8004 4672616374696f6e204f6666
+        0x2005 51460000dd0500000300
+        0x8004 427265616b20706f696e742033
+        0x8004 4672616374696f6e2073697a6520312e30206d6c
+        0x2005 1c750000c40900000400
+        0x2005 fca30000ac0d00000500
+        0x2003 6cbb00009e0f00000001
+        0x8004 466c6f7720302e30206d6c2f6d696e";
+
+    /// The debug run through the protocol, with a fraction delay volume.
+    fn debug_run(delay_ml: f64) -> AppState {
+        let mut a = app(1.0); // 1 µl per count: the run was 4 ml
+        a.fraction_delay_ml = delay_ml;
+        for line in DEBUG_RUN_2026_11_13.lines() {
+            let (opc, hex) = line.trim().split_once(' ').unwrap();
+            let opc = u16::from_str_radix(opc.trim_start_matches("0x"), 16).unwrap();
+            let data: Vec<u8> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                .collect();
+            // no trend data in the capture: time and volume from the messages carrying them
+            if matches!(opc, OPC_TUBEFEED | OPC_RUN_STATE) {
+                a.inst.cum_time_ms = le_uint(&data, 0, 4) as f64 * 10.0;
+                a.inst.cum_vol_ml = a.vol_ml(le_uint(&data, 4, 4) as f64);
+            }
+            dispatch_rx_opc(&mut a, opc, &data);
+        }
+        a
+    }
+
+    fn fraction_volumes(a: &AppState) -> Vec<(i64, f64, Option<f64>)> {
+        a.fractions
+            .iter()
+            .map(|f| (f.fraction_number, f.start_vol_ml, f.end_vol_ml))
+            .collect()
+    }
+
+    #[test]
+    fn debug_run_tubes_as_the_instrument_fed_them() {
+        let a = debug_run(0.0);
+        assert_eq!(
+            fraction_volumes(&a),
+            [
+                (1, 0.001, Some(1.0)),
+                (2, 1.0, Some(1.001)), // fed at the stop: a drop at most
+                (3, 1.501, Some(2.5)),
+                (4, 2.5, Some(3.5)),
+                (5, 3.5, Some(3.998)), // closed by the run's end
+            ]
+        );
+        let mut back = AppState::new();
+        back.events = a.events.clone();
+        back.rebuild_fractions();
+        assert_eq!(back.fractions, a.fractions);
+    }
+
+    /// The same run with the instrument's delay volume, 580 µl: in the rack,
+    /// tube 4 held less than 1 ml and tube 5 stayed empty, as what passed the UV
+    /// cell after 3.418 ml was still in the tubing when the pump stopped.
+    #[test]
+    fn debug_run_with_the_delay_volume_as_in_the_rack() {
+        let a = debug_run(0.58);
+        let cut = 3.998 - 0.58;
+        assert_eq!(
+            fraction_volumes(&a),
+            [
+                (1, 0.001, Some(1.0)),
+                (2, 1.0, Some(1.001)),
+                (3, 1.501, Some(2.5)),
+                (4, 2.5, Some(cut)),
+                (5, 3.5, Some(3.5)), // empty
+            ]
+        );
+        // its time at the fraction's flow, 0.5 ml/min
+        let t4 = a.fractions[3].end_time_ms.unwrap();
+        assert!((t4 - cut * 120_000.0).abs() < 1000.0, "{t4}");
+        let mut back = AppState::new();
+        back.fraction_delay_ml = 0.58;
+        back.events = a.events.clone();
+        back.rebuild_fractions();
+        assert_eq!(fraction_volumes(&back), fraction_volumes(&a));
+    }
+
+    /// Fractionation stopped and started again: the numbers are the
+    /// instrument's, so the tubes after the restart are numbered as in the
+    /// rack, whether the stop feed names the next tube (11, which then holds a
+    /// drop) or sends 0, and the reopened log shows the same.
+    #[test]
+    fn tube_numbers_across_a_stop_and_restart() {
+        let feed = |n: u8| [0, 0, 0, 0, 0, 0, 0, 0, n, 0];
+        // (ml, message): tubes 9 and 10 of 10 ml, a stop at 105 ml, tube 12 from 105.1 ml
+        for stop_tube in [11, 0] {
+            let mut a = app(10.0);
+            let script: [(f64, Vec<u8>, bool); 7] = [
+                (84.9, feed(9).to_vec(), true),
+                (85.0, b"Fraction size 10.0 ml".to_vec(), false),
+                (95.0, feed(10).to_vec(), true),
+                (105.0, feed(stop_tube).to_vec(), true),
+                (105.007, b"Fraction Off".to_vec(), false),
+                (105.1, feed(12).to_vec(), true),
+                (105.107, b"Fraction size 10.0 ml".to_vec(), false),
+            ];
+            for (ml, msg, is_feed) in &script {
+                a.inst.cum_vol_ml = *ml;
+                a.inst.cum_time_ms = ml * 60_000.0;
+                let opc = if *is_feed {
+                    OPC_TUBEFEED
+                } else {
+                    OPC_LOG_SINGLE
+                };
+                dispatch_rx_opc(&mut a, opc, msg);
+            }
+            let got: Vec<(i64, f64, Option<f64>)> = a
+                .fractions
+                .iter()
+                .map(|f| (f.fraction_number, f.start_vol_ml, f.end_vol_ml))
+                .collect();
+            let want: Vec<(i64, f64, Option<f64>)> = if stop_tube == 11 {
+                vec![
+                    (9, 85.0, Some(95.0)),
+                    (10, 95.0, Some(105.0)),
+                    (11, 105.0, Some(105.007)), // a drop
+                    (12, 105.107, None),
+                ]
+            } else {
+                vec![
+                    (9, 85.0, Some(95.0)),
+                    (10, 95.0, Some(105.007)),
+                    (12, 105.107, None),
+                ]
+            };
+            assert_eq!(got, want, "stop feed names tube {stop_tube}");
+            let mut back = AppState::new();
+            back.events = a.events.clone();
+            back.rebuild_fractions();
+            assert_eq!(
+                back.fractions, a.fractions,
+                "reopened, stop tube {stop_tube}"
+            );
+        }
+    }
+
+    /// A method started from the PC with the injection valve in Load, as an
+    /// ÄKTAprime reports it (run state messages with byte 9 = 1): the valve
+    /// stays as the method set it until the method moves it.
+    #[test]
+    fn the_method_sets_the_valve_not_the_run_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = app(10.0);
+        a.log_dir = dir.path().to_path_buf();
+        a.log_filename = dir.path().join("first.csv");
+        a.log = Some(rc_core::csvlog::CsvLog::create(&a.log_filename).unwrap());
+        a.inst.inject_value = InjectValue::Inject; // left so by the previous run
+        dispatch_rx_opc(&mut a, OPC_RUN_STATE, &[0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x01]);
+        dispatch_rx_opc(&mut a, OPC_TREND_DATA, &TRENDS[0]);
+        method_dump_received(&mut a, METHOD_DUMP.as_bytes()); // inject Load
+        assert_eq!(a.inst.inject_value, InjectValue::Load);
+        dispatch_rx_opc(&mut a, OPC_RUN_STATE, &[0, 0, 0, 0, 0, 0, 0, 0, 0x01, 0x01]);
+        assert_eq!(a.inst.run_state, "Run");
+        assert_eq!(a.inst.inject_value, InjectValue::Load);
+        dispatch_rx_opc(&mut a, OPC_LOG_SINGLE, b"Injection Valve Inj");
+        assert_eq!(a.inst.inject_value, InjectValue::Inject);
+        dispatch_rx_opc(&mut a, OPC_RUN_STATE, &[0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x01]);
+        assert_eq!(a.inst.inject_value, InjectValue::Inject);
+        // the log replays to the same valve: Load from the start, Inject later
+        let method_start = a
+            .events
+            .iter()
+            .find(|e| e.text.starts_with("Method start:"))
+            .expect("method start recorded");
+        assert!(
+            method_start.text.contains("inject Load"),
+            "{}",
+            method_start.text
+        );
+        assert!(a.events.iter().all(|e| !e.text.contains("inject=")));
     }
 
     /// A method dump through the protocol: saved as .met with raw capture

@@ -125,9 +125,10 @@ wall_time,cum_time_ms,cum_vol_mL,type,uv_AU,cond_mScm,ph,pctb_pct,pres_MPa,temp_
   into semicolons and line breaks into spaces; quotes inside are not escaped.
 - Readers skip the comment line, the header and blank lines, accept `\n` or
   `\r\n`, and split each row into at most 11 fields.
-- Files are named `<prefix>_<yyyymmdd_HHMMSS>.csv`; a second start within
-  the same second gets `_2`, `_3`, … rather than overwriting a log. Side files
-  replace `.csv`: `_raw.txt` (raw capture), `_method_N.met` (method dumps).
+- Files are named `<yyyymmdd_HHMMSS>_<prefix>.csv` (date first, so they sort
+  by time); a second start within the same second gets `_2`, `_3`, … rather
+  than overwriting a log. Side files replace `.csv`: `_raw.txt` (raw
+  capture), `_method_N.met` (method dumps).
   A log that never received data is deleted on close.
 
 ### Method files `PrimeMeth_NNN.txt`

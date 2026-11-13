@@ -241,7 +241,7 @@ fn printf_g() {
 fn event_labels_match_reference() {
     use EventKind::*;
     // kind, text → label at the top, fraction label at the bottom
-    let cases: [(EventKind, &str, &str, &str); 25] = [
+    let cases: [(EventKind, &str, &str, &str); 26] = [
         (Inject, "Valve → inject (demo)", "INJ INJECT", "?"),
         (Inject, "Inject event (8 bytes)", "INJECT", "?"),
         (RunState, "Run state: Run  inject=IV_LOAD", "RUN", "?"),
@@ -249,6 +249,7 @@ fn event_labels_match_reference() {
         (Step, "Step t=0.0s  v=0.0000mL", "STEP", "?"),
         (Log, "Fraction size 1.0 ml", "FRAC START", "?"),
         (Log, "Fraction size 0.0 ml", "FRAC STOP", "?"),
+        (Log, "Fraction Off", "FRAC STOP", "?"),
         (Log, "Manual Set; Buffer Valve Pos 3", "Buffer 3", "?"),
         (Log, "Injection Valve Inj", "Inj valve Inj", "?"),
         (Log, "Flow 1.0 ml/min", "Flow 1.0", "?"),
@@ -448,15 +449,91 @@ fn state_at_past_moments() {
 }
 
 #[test]
+fn state_at_follows_tube_feeds_and_fraction_off() {
+    use EventKind::*;
+    // an instrument log written before tube numbers were recorded
+    let feed = "Tubefeed event (10 bytes)";
+    let events = [
+        ev(1.0, Tubefeed, feed), // before anything is collected: tube 1
+        ev(1.1, Log, "Fraction size 10.0 ml"),
+        ev(2.0, Tubefeed, feed),
+        ev(3.0, Tubefeed, feed),
+        ev(3.1, Log, "Fraction Off"),
+        ev(4.0, Tubefeed, "Feed Tube Nr 9"), // a recorded number is taken as is
+        ev(5.0, Tubefeed, "Feed Tube Nr 0"), // the end of fractionation: no tube
+    ];
+    let at = |t: f64| {
+        let s = state_at(&events, &pt(t));
+        (s.fraction_number, s.fraction_vol_ml)
+    };
+    assert_eq!(at(1.5), (1, 10.0));
+    assert_eq!(at(2.5), (2, 10.0));
+    assert_eq!(at(3.05), (3, 10.0));
+    assert_eq!(at(3.5), (3, 0.0));
+    assert_eq!(at(4.5), (9, 0.0));
+    assert_eq!(at(5.5), (9, 0.0));
+}
+
+#[test]
+fn state_at_skips_the_stop_feed_of_an_older_log() {
+    use EventKind::*;
+    // minutes; the stop feed comes 0.6 s before "Fraction Off"
+    let feed = "Tubefeed event (10 bytes)";
+    let events = [
+        ev(1.0, Tubefeed, feed),
+        ev(1.001, Log, "Fraction size 1.0 ml"),
+        ev(2.0, Tubefeed, feed),
+        ev(2.01, Tubefeed, feed), // the stop (tube 0)
+        ev(2.02, Log, "Fraction Off"),
+        ev(2.5, Tubefeed, feed),
+        ev(2.501, Log, "Fraction size 1.0 ml"),
+        ev(3.0, RunState, "Run state: End  inject=IV_INJECT"),
+    ];
+    let at = |t: f64| {
+        let s = state_at(&events, &pt(t));
+        (s.fraction_number, s.fraction_vol_ml)
+    };
+    assert_eq!(at(1.5), (1, 1.0));
+    assert_eq!(at(2.3), (2, 0.0));
+    assert_eq!(at(2.7), (3, 1.0));
+    assert_eq!(at(3.5), (3, 0.0)); // the run's end stops fractionation
+}
+
+#[test]
+fn fraction_off_stops_like_size_zero() {
+    use EventKind::*;
+    let events = [
+        ev(1.0, Log, "Fraction size 10.0 ml"),
+        ev(2.0, Log, "Fraction Off"),
+        ev(3.0, Log, "Fraction size 10.0 ml"),
+        ev(4.0, Log, "Fraction size 2.0 ml"),
+    ];
+    let shown: Vec<&str> = labelled_events(&events)
+        .iter()
+        .map(|e| e.text.as_str())
+        .collect();
+    // start, stop, start again; a size change while collecting is not shown
+    assert_eq!(
+        shown,
+        [
+            "Fraction size 10.0 ml",
+            "Fraction Off",
+            "Fraction size 10.0 ml"
+        ]
+    );
+}
+
+#[test]
 fn state_and_valve_summary_match_reference() {
     use EventKind::*;
     let events = [
         ev(
             0.1,
             Log,
-            "Method start: flow 0.5 ml/min, 0 %B, buffer port 3, inject Inj, fraction 0.0 ml, 2 breakpoints",
+            "Method start: flow 0.5 ml/min, 0 %B, buffer port 3, inject Load, fraction 0.0 ml, 2 breakpoints",
         ),
-        ev(0.2, RunState, "Run state: Run  inject=IV_LOAD"),
+        // as an ÄKTAprime logs it: the run state's "inject=" is not the valve
+        ev(0.2, RunState, "Run state: Run  inject=IV_INJECT"),
         ev(1.0, Log, "Buffer Valve Pos 8"),
         ev(3.0, Log, "Fraction size 1.0 ml"),
         ev(3.5, Log, "Feed Tube Nr 0"),
@@ -481,13 +558,13 @@ fn state_and_valve_summary_match_reference() {
         (
             0.15,
             "---",
-            InjectValue::Inject,
+            InjectValue::Load,
             3,
             true,
             0.0,
             1,
-            "Valve inject · Buffer 3 (Tris) · Outlet waste",
-            "Valve inject · Buffer 3 · Outlet waste",
+            "Valve load · Buffer 3 (Tris) · Outlet waste",
+            "Valve load · Buffer 3 · Outlet waste",
         ),
         (
             0.5,
@@ -545,6 +622,21 @@ fn state_and_valve_summary_match_reference() {
         assert_eq!(valve_summary(&s, &info), vs_info, "t={t}");
         assert_eq!(valve_summary(&s, &none), vs, "t={t}");
     }
+}
+
+#[test]
+fn demo_valve_events_set_the_valve() {
+    use EventKind::*;
+    let events = [
+        ev(0.1, Inject, "Valve → LOAD (demo)"),
+        ev(0.2, RunState, "Run state: Run  inject=IV_LOAD"),
+        ev(1.0, Inject, "Valve → WASTE (demo)"),
+        ev(2.0, Inject, "Inject event (8 bytes)"), // the instrument's: no position
+    ];
+    let valve = |t: f64| state_at(&events, &pt(t)).inject_value;
+    assert_eq!(valve(0.5), InjectValue::Load);
+    assert_eq!(valve(1.5), InjectValue::Waste);
+    assert_eq!(valve(2.5), InjectValue::Waste);
 }
 
 #[test]

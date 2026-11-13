@@ -15,6 +15,9 @@ pub use types::*;
 /// µL per volume count when nothing is configured (ÄKTAprime plus).
 /// The ÄKTAprime (not plus) needs 1 µL — set in Settings.
 pub const DEFAULT_VOLUME_UNIT_UL: f64 = 10.0;
+/// Delay volume (mL) between the UV cell and the fraction collector, as set
+/// on the ÄKTAprime RustyCorn was developed with (580 µL).
+pub const DEFAULT_FRACTION_DELAY_ML: f64 = 0.58;
 
 pub const APP_NAME: &str = "RustyCorn";
 pub const GITHUB_URL: &str = "https://github.com/CalvinKlein96/RustyCorn";

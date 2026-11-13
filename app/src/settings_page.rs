@@ -443,11 +443,38 @@ impl SettingsPage {
                 );
             }
         }
+        row_separator(ui);
+
+        let note = "Volume between the UV cell and the fraction collector, as set on the \
+                    ÄKTAprime. What passed the UV cell in it before a run ends reaches no tube: \
+                    the last fractions are cut there. For runs ending and logs opened from now on.";
+        let mut delay_ul = (acq.settings.fraction_delay_ml * 1000.0).round();
+        let r = setting_row(ui, "Fraction delay volume", note, CONTROL_WIDTH, |ui| {
+            ui.add(
+                egui::DragValue::new(&mut delay_ul)
+                    .range(0.0..=10_000.0)
+                    .speed(1.0)
+                    .suffix(" µL"),
+            )
+        });
+        let delay_ml = delay_ul / 1000.0;
+        if r.changed() && delay_ml != acq.settings.fraction_delay_ml {
+            acq.settings.fraction_delay_ml = delay_ml;
+            {
+                let mut app = acq.app.lock();
+                app.fraction_delay_ml = delay_ml;
+            }
+            self.changed(
+                acq,
+                format!("Fraction delay volume set to {delay_ul} µL."),
+                false,
+            );
+        }
     }
 
     fn logging_rows(&mut self, ui: &mut Ui, acq: &mut Acquisition) {
         let t = palette(ui.ctx());
-        let note = "Press Enter to apply. Used for the next log file: <prefix>_<date>_<time>.csv";
+        let note = "Press Enter to apply. Used for the next log file: <date>_<time>_<prefix>.csv";
         let mut submitted = false;
         setting_row(ui, "Log file prefix", note, CONTROL_WIDTH, |ui| {
             let field = ui

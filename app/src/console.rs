@@ -32,7 +32,7 @@ pub fn banner(s: &Settings) -> String {
         String::new(),
         "  Data are saved as CSV files in the data folder (change in Settings):".to_string(),
         format!("      {}", data.display()),
-        "  named <prefix>_<date>_<time>.csv. A new file is started for every".to_string(),
+        "  named <date>_<time>_<prefix>.csv. A new file is started for every".to_string(),
         "  run; logs without any data are discarded.".to_string(),
         String::new(),
         "  Methods the Akta saves to or loads from the PC are in the methods".to_string(),
@@ -100,7 +100,7 @@ pub fn report_output(app: &AppState) -> String {
         format!("      {}", dir.display()),
         String::new(),
         "  Files this session are named:".to_string(),
-        format!("      {}_<date>_<time>.csv", app.log_prefix),
+        format!("      <date>_<time>_{}.csv", app.log_prefix),
         String::new(),
         format!("  Most recent run: {recent}"),
         bar(),
@@ -182,11 +182,11 @@ mod tests {
         let mut app = AppState::new();
         app.log_dir = PathBuf::from("/data/akta");
         app.log_prefix = "akta".into();
-        app.log_filename = PathBuf::from("/data/akta/akta_20261020_114429.csv");
+        app.log_filename = PathBuf::from("/data/akta/20261020_114429_akta.csv");
         let r = report_output(&app);
         assert!(r.contains("      /data/akta\n"));
-        assert!(r.contains("akta_<date>_<time>.csv"));
-        assert!(r.contains("Most recent run: akta_20261020_114429.csv"));
+        assert!(r.contains("<date>_<time>_akta.csv"));
+        assert!(r.contains("Most recent run: 20261020_114429_akta.csv"));
     }
 
     #[test]

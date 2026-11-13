@@ -128,6 +128,7 @@ mod tests {
             highlighted: None,
             title: None,
             events_shown: rc_plotdata::EventDisplay::All,
+            show_fractions: true,
         }
     }
 

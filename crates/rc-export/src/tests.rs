@@ -50,6 +50,7 @@ fn request(
         highlighted,
         title: Some("akta_20261020_135011.csv".to_string()),
         events_shown: EventDisplay::All,
+        show_fractions: true,
     }
 }
 
@@ -63,11 +64,8 @@ fn figure_path_format() {
     let p = figure_path(Path::new("/data/logs"), "akta", 3);
     let name = p.file_name().and_then(|n| n.to_str()).expect("name");
     assert_eq!(p.parent(), Some(Path::new("/data/logs")));
-    assert!(
-        name.starts_with("akta_") && name.ends_with("_figure_3.pdf"),
-        "{name}"
-    );
-    let stamp = &name["akta_".len()..name.len() - "_figure_3.pdf".len()];
+    assert!(name.ends_with("_akta_figure_3.pdf"), "{name}");
+    let stamp = &name[..name.len() - "_akta_figure_3.pdf".len()];
     assert_eq!(stamp.len(), 15, "{stamp}"); // yyyymmdd_HHMMSS
     assert_eq!(&stamp[8..9], "_");
     assert!(
@@ -77,7 +75,7 @@ fn figure_path_format() {
             .all(|c| c.is_ascii_digit())
     );
     let p = figure_path(Path::new(""), "", 1);
-    assert!(p.to_string_lossy().starts_with("akta_"));
+    assert!(p.to_string_lossy().ends_with("_akta_figure_1.pdf"));
 }
 
 #[test]
@@ -158,6 +156,7 @@ fn synthetic() -> ExportRequest {
         highlighted: Some(Channel::Cond),
         title: Some("synthetic".into()),
         events_shown: EventDisplay::All,
+        show_fractions: true,
         trend,
     }
 }
@@ -437,4 +436,28 @@ fn export_of_a_long_real_log() {
     let path = out.join("long_run.pdf");
     save_pdf(&req, &path).expect("save");
     assert!(std::fs::read(&path).expect("read").starts_with(b"%PDF-"));
+}
+
+#[test]
+fn fraction_numbers_in_the_panel_and_the_overlay() {
+    let mut req = synthetic();
+    for f in &mut req.fractions {
+        f.fraction_number += 40; // 41, 42: numbers nothing else on the page shows
+    }
+    req.xlim = (0.0, 20.0); // the middle of the open fraction 42 in view
+    let count =
+        |req: &ExportRequest, n: &str| render_svg(req).matches(&format!(">{n}</text>")).count();
+    // the %B panel and the overlay
+    assert_eq!(count(&req, "41"), 2);
+    assert_eq!(count(&req, "42"), 2);
+    // without the %B panel, still in the overlay
+    req.panels.retain(|p| p.channel != Channel::Pctb);
+    assert_eq!(count(&req, "41"), 1);
+    assert_eq!(count(&req, "42"), 1);
+    // switched off: neither numbers nor shading
+    let shading = |req: &ExportRequest| render_svg(req).matches("fill-opacity=\"0.14\"").count();
+    assert!(shading(&req) > 0);
+    req.show_fractions = false;
+    assert_eq!(count(&req, "41") + count(&req, "42"), 0);
+    assert_eq!(shading(&req), 0);
 }
