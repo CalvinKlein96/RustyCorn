@@ -3123,7 +3123,7 @@ dependencies = [
 
 [[package]]
 name = "rc-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -3137,7 +3137,7 @@ dependencies = [
 
 [[package]]
 name = "rc-export"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "log",
@@ -3150,7 +3150,7 @@ dependencies = [
 
 [[package]]
 name = "rc-methodeditor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "egui",
@@ -3164,7 +3164,7 @@ dependencies = [
 
 [[package]]
 name = "rc-methods"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "log",
@@ -3175,7 +3175,7 @@ dependencies = [
 
 [[package]]
 name = "rc-panels"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "egui",
@@ -3187,7 +3187,7 @@ dependencies = [
 
 [[package]]
 name = "rc-plotdata"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rc-core",
  "regex",
@@ -3196,7 +3196,7 @@ dependencies = [
 
 [[package]]
 name = "rc-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "crossbeam-channel",
@@ -3211,7 +3211,7 @@ dependencies = [
 
 [[package]]
 name = "rc-runview"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "egui",
@@ -3228,7 +3228,7 @@ dependencies = [
 
 [[package]]
 name = "rc-theme"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "egui",
  "tempfile",
@@ -3468,7 +3468,7 @@ dependencies = [
 
 [[package]]
 name = "rustycorn"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
